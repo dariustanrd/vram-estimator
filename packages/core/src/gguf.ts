@@ -51,6 +51,10 @@ const GGML_TYPES: Record<number, TensorTypeSpec> = {
   35: { name: "TQ2_0", blockSize: 256, typeSize: 66 }
 };
 
+const GGML_TYPE_BY_NAME: Record<string, TensorTypeSpec> = Object.fromEntries(
+  Object.values(GGML_TYPES).map((spec) => [spec.name.toLowerCase(), spec])
+);
+
 export function resolveGgufUrl(source: string): string {
   if (isUrl(source)) return source;
   const [repo, file] = source.split("::");
@@ -294,9 +298,9 @@ export function ggufString(metadata: GgufMetadata, key: string): string | undefi
 
 export function cacheTypeBytes(cacheType: string): number | undefined {
   const normalized = cacheType.toLowerCase();
-  if (normalized === "f32") return 4;
-  if (normalized === "f16" || normalized === "bf16") return 2;
-  if (normalized === "q8_0") return 1;
-  if (normalized === "q4_0" || normalized === "q4_1") return 0.5;
-  return undefined;
+  const spec = GGML_TYPE_BY_NAME[normalized];
+  if (!spec) return undefined;
+  // Exact bytes-per-element for block-quantized types (e.g. Q4_0 is 18 bytes per 32-element
+  // block = 0.5625 B/elem, not a flat 0.5), matching the same table used for tensor byte sizes.
+  return spec.typeSize / spec.blockSize;
 }

@@ -70,6 +70,29 @@ export async function estimateVllm(
     "config.num_key_value_heads"
   );
   const gqa = exactGqa(input.overrides?.gqa, attentionHeads, kvHeads);
+
+  // head_dim is only equal to hidden_size / num_attention_heads for "standard" MHA/GQA layouts.
+  // Several current architectures (Gemma2/3, Qwen2/2.5, etc.) publish an explicit head_dim that
+  // differs from that ratio; prefer it whenever config.json exposes it.
+  const headDimExact = valueWithOverride(
+    input.overrides?.headDim,
+    numberField(config, "head_dim"),
+    "override.headDim",
+    "config.head_dim"
+  );
+  const headDim = headDimExact ?? deriveHeadDim(hiddenSize, attentionHeads);
+  const headDimAssumed = !headDimExact && Boolean(headDim);
+  const kvHeadsResolved = kvHeads ?? deriveKvHeadsFromGqaOverride(input.overrides?.gqa, attentionHeads);
+  const kvGroupWidth =
+    kvHeadsResolved && headDim
+      ? gt(
+          kvHeadsResolved.value * headDim.value,
+          `${kvHeadsResolved.source} x ${headDim.source}`,
+          kvHeadsResolved.providedBy === "user" || headDimExact?.providedBy === "user" ? "user" : "metadata",
+          headDimAssumed
+        )
+      : undefined;
+
   const modelDtype = input.overrides?.modelDtype ?? stringField(config, "torch_dtype");
   const defaultKvDtype = defaults.kv_cache_dtype?.value as string | undefined;
   const selectedKvDtype = input.kvDtype ?? defaultKvDtype;
@@ -94,10 +117,10 @@ export async function estimateVllm(
       reason: "vLLM kv_cache_dtype=auto requires an explicit model torch_dtype or user kvBytes override."
     });
   }
-  if (attentionHeads && !kvHeads && input.overrides?.gqa === undefined) {
+  if (attentionHeads && !kvHeadsResolved) {
     missing.push({
       field: "gqa",
-      reason: "num_key_value_heads is absent; exact GQA ratio cannot be derived."
+      reason: "num_key_value_heads is absent; provide a kvHeads or gqa override to derive the exact GQA ratio."
     });
   }
   if (!metadata.weightBytes && input.overrides?.weightBytes === undefined) {
@@ -107,24 +130,50 @@ export async function estimateVllm(
     });
   }
 
+  const notes = [
+    "vLLM v1 estimate is single GPU only with tensor_parallel_size=1.",
+    "This is a deterministic estimate from exact metadata and selected runtime defaults, not observed runtime allocation.",
+    `KV cache assumes ${batch?.value ?? "batch"} concurrent sequences each holding the full ${context?.value ?? "context"}-token context simultaneously (a worst-case capacity bound, defaulted from runtime.max_num_seqs and config.max_position_embeddings). Real vLLM allocates KV cache blocks dynamically from whatever memory is available and typically needs far less in normal traffic. Override context/batch to model your expected concurrency instead of relying on these defaults.`,
+    "\"Overhead\" is a modeled residual computed as (weights + kv_cache) / gpu_memory_utilization - weights - kv_cache. It approximates activation memory, CUDA graphs, and allocator overhead as a fixed proportion of the utilization setting; it is not vLLM's actual memory-profiler output, which depends on max_num_batched_tokens and intermediate size."
+  ];
+  if (headDimAssumed) {
+    notes.push(
+      "config.json does not expose head_dim explicitly; assumed head_dim = hidden_size / num_attention_heads. This assumption is wrong for architectures with a non-standard head_dim (e.g. Gemma2/3, Qwen2/2.5); use the headDim override if you know the model's real value."
+    );
+  }
+  const slidingWindow = numberField(config, "sliding_window");
+  if (typeof slidingWindow === "number" && context && slidingWindow < context.value) {
+    notes.push(
+      `config.json reports sliding_window=${slidingWindow}, smaller than the ${context.value}-token context used here. The KV cache formula assumes every layer caches the full context; sliding-window layers actually only need up to ${slidingWindow} tokens, so real KV cache usage is likely lower than shown.`
+    );
+  }
+  if (config.rope_scaling) {
+    notes.push(
+      "config.json includes rope_scaling. max_position_embeddings may reflect either the base or the RoPE-scaled context length depending on how the checkpoint was published; verify the intended context length and use the context override if needed."
+    );
+  }
+
   return calculateEstimate({
     mode: "vllm",
     weightBytes,
     layers,
-    hiddenSize,
+    kvGroupWidth,
     context,
     batch,
     kvBytes: gt(kvBytesValue, input.overrides?.kvBytes !== undefined ? "override.kvBytes" : `dtype.${resolvedKvDtype}`, input.overrides?.kvBytes !== undefined ? "user" : "metadata"),
-    gqa,
     utilization,
     userOverrides,
     modelSources: metadata.sources,
     runtimeSources: Object.values(defaults),
-    notes: [
-      "vLLM v1 estimate is single GPU only with tensor_parallel_size=1.",
-      "This is a deterministic estimate from exact metadata and selected runtime defaults, not observed runtime allocation."
-    ],
-    missing
+    notes,
+    missing,
+    displayValues: {
+      hiddenSize,
+      attentionHeads,
+      kvHeads: kvHeadsResolved,
+      headDim,
+      gqa
+    }
   });
 }
 
@@ -182,6 +231,51 @@ export async function estimateLlamaCpp(
     `${prefix}attention.head_count_kv`
   );
   const gqa = exactGqa(input.overrides?.gqa, attentionHeads, kvHeads);
+  const kvHeadsResolved = kvHeads ?? deriveKvHeadsFromGqaOverride(input.overrides?.gqa, attentionHeads);
+
+  // llama.cpp's GGUF writer stores the true per-head K/V dimensions as attention.key_length /
+  // attention.value_length for most architectures. Prefer those over the hidden_size / head_count
+  // ratio, which silently breaks for models with a non-standard head_dim (Gemma2/3, etc).
+  const keyHeadDim = valueWithOverride(
+    input.overrides?.headDim,
+    arch ? ggufNumber(metadata, `${prefix}attention.key_length`) : undefined,
+    "override.headDim",
+    `${prefix}attention.key_length`
+  );
+  const valueHeadDim = valueWithOverride(
+    input.overrides?.headDim,
+    arch ? ggufNumber(metadata, `${prefix}attention.value_length`) : undefined,
+    "override.headDim",
+    `${prefix}attention.value_length`
+  );
+  const fallbackHeadDim = deriveHeadDim(hiddenSize, attentionHeads);
+  const headDimK = keyHeadDim ?? fallbackHeadDim;
+  const headDimV = valueHeadDim ?? fallbackHeadDim;
+  const headDimAssumed = !keyHeadDim && !valueHeadDim && Boolean(fallbackHeadDim);
+  const asymmetricHeadDim = Boolean(keyHeadDim && valueHeadDim && keyHeadDim.value !== valueHeadDim.value);
+  // The shared kv_cache formula (calculator.ts) uses a single averaged K/V element width. This is
+  // exact whenever key_length === value_length (true for essentially every published llama.cpp
+  // model) and only approximate for architectures that report asymmetric K/V dimensions, flagged
+  // via a note below.
+  const avgHeadDim =
+    headDimK && headDimV
+      ? gt(
+          (headDimK.value + headDimV.value) / 2,
+          asymmetricHeadDim ? `avg(${headDimK.source}, ${headDimV.source})` : headDimK.source,
+          "metadata",
+          headDimAssumed
+        )
+      : undefined;
+  const kvGroupWidth =
+    kvHeadsResolved && avgHeadDim
+      ? gt(
+          kvHeadsResolved.value * avgHeadDim.value,
+          `${kvHeadsResolved.source} x ${avgHeadDim.source}`,
+          kvHeadsResolved.providedBy === "user" ? "user" : "metadata",
+          headDimAssumed
+        )
+      : undefined;
+
   const cacheTypeK = input.cacheTypeK ?? (defaults.cache_type_k?.value as string | undefined);
   const cacheTypeV = input.cacheTypeV ?? (defaults.cache_type_v?.value as string | undefined);
   const cacheBytesK = input.overrides?.cacheBytesK ?? (cacheTypeK ? cacheTypeBytes(cacheTypeK) : undefined);
@@ -213,18 +307,45 @@ export async function estimateLlamaCpp(
       reason: `GGUF tensor table contains unsupported tensor types: ${metadata.unknownTensorTypes.join(", ")}.`
     });
   }
-  if (attentionHeads && !kvHeads && input.overrides?.gqa === undefined) {
+  if (attentionHeads && !kvHeadsResolved) {
     missing.push({
       field: "gqa",
-      reason: "GGUF attention.head_count_kv is absent; exact GQA ratio cannot be derived."
+      reason: "GGUF attention.head_count_kv is absent; provide a kvHeads or gqa override to derive the exact GQA ratio."
     });
+  }
+
+  const notes = [
+    "llama.cpp v1 estimate assumes full GPU offload equivalent to --gpu-layers 999.",
+    "This is a deterministic estimate from exact GGUF metadata and selected runtime defaults, not observed runtime allocation.",
+    "context is treated as the desired context PER PARALLEL SLOT; total KV cache reserved = context x parallel, matching how llama.cpp's --ctx-size total budget is divided across --parallel slots. If you already have a fixed total --ctx-size in mind, set parallel=1 and pass that total directly as context."
+  ];
+  if (defaults.runtime_utilization?.value === 1) {
+    notes.push(
+      "The default runtime_utilization=1 assumes no extra reservation, so overhead will show as ~0. This does NOT include llama.cpp's ggml compute/graph buffer, which typically adds hundreds of MB to a few GB depending on context size, batch size, and flash-attention settings. Lower the utilization or add manual headroom for a safer real-world estimate."
+    );
+  }
+  if (headDimAssumed) {
+    notes.push(
+      `${prefix}attention.key_length / ${prefix}attention.value_length are absent from this GGUF file; assumed head_dim = embedding_length / attention.head_count. This assumption is wrong for architectures with a non-standard head_dim (e.g. Gemma2/3); use the headDim override if you know the model's real value.`
+    );
+  }
+  if (asymmetricHeadDim) {
+    notes.push(
+      "This architecture reports different key_length and value_length (asymmetric K/V head dimensions, e.g. some latent-attention designs); the KV cache formula averages them and may be inaccurate for this model."
+    );
+  }
+  const slidingWindow = arch ? ggufNumber(metadata, `${prefix}attention.sliding_window`) : undefined;
+  if (typeof slidingWindow === "number" && context && slidingWindow < context.value) {
+    notes.push(
+      `GGUF metadata reports ${prefix}attention.sliding_window=${slidingWindow}, smaller than the ${context.value}-token context used here. Sliding-window layers only need up to ${slidingWindow} cached tokens, so real KV cache usage is likely lower than shown.`
+    );
   }
 
   return calculateEstimate({
     mode: "llamacpp",
     weightBytes,
     layers,
-    hiddenSize,
+    kvGroupWidth,
     context,
     batch: parallel,
     kvBytes: gt(
@@ -234,17 +355,21 @@ export async function estimateLlamaCpp(
         : `cache-types.${cacheTypeK}/${cacheTypeV}`,
       input.overrides?.cacheBytesK !== undefined || input.overrides?.cacheBytesV !== undefined ? "user" : "runtime-default"
     ),
-    gqa,
     utilization,
     userOverrides,
     modelSources: metadata.sources,
     runtimeSources: Object.values(defaults),
-    notes: [
-      "llama.cpp v1 estimate assumes full GPU offload equivalent to --gpu-layers 999.",
-      "This is a deterministic estimate from exact GGUF metadata and selected runtime defaults, not observed runtime allocation."
-    ],
+    notes,
     missing,
-    kvFormulaLabel: `kv_cache = layers x hidden x context x parallel x (cache_bytes_k + cache_bytes_v) x gqa = ${layers?.value ?? "?"} x ${hiddenSize?.value ?? "?"} x ${context?.value ?? "?"} x ${parallel?.value ?? "?"} x (${cacheBytesK ?? "?"} + ${cacheBytesV ?? "?"}) x ${gqa?.value ?? "?"}`
+    kvFormulaLabel: `kv_cache = layers x kv_group_width x context x parallel x (cache_bytes_k + cache_bytes_v) \n\t= ${layers?.value ?? "?"} x ${kvGroupWidth?.value ?? "?"} x ${context?.value ?? "?"} x ${parallel?.value ?? "?"} x (${cacheBytesK ?? "?"} + ${cacheBytesV ?? "?"})`,
+    displayValues: {
+      hiddenSize,
+      attentionHeads,
+      kvHeads: kvHeadsResolved,
+      headDimK,
+      headDimV,
+      gqa
+    }
   });
 }
 
@@ -267,6 +392,27 @@ function exactGqa(
   if (override !== undefined) return gt(override, "override.gqa", "user");
   if (!attentionHeads || !kvHeads) return undefined;
   return gt(kvHeads.value / attentionHeads.value, `${kvHeads.source} / ${attentionHeads.source}`, "metadata");
+}
+
+function deriveHeadDim(
+  hiddenSize: GroundTruthValue<number> | undefined,
+  attentionHeads: GroundTruthValue<number> | undefined
+): GroundTruthValue<number> | undefined {
+  if (!hiddenSize || !attentionHeads) return undefined;
+  return gt(
+    hiddenSize.value / attentionHeads.value,
+    `${hiddenSize.source} / ${attentionHeads.source} (assumed head_dim)`,
+    "metadata",
+    true
+  );
+}
+
+function deriveKvHeadsFromGqaOverride(
+  gqaOverride: number | undefined,
+  attentionHeads: GroundTruthValue<number> | undefined
+): GroundTruthValue<number> | undefined {
+  if (gqaOverride === undefined || !attentionHeads) return undefined;
+  return gt(attentionHeads.value * gqaOverride, `override.gqa x ${attentionHeads.source}`, "user");
 }
 
 function compact(values: Record<string, unknown>): Record<string, unknown> {

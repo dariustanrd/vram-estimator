@@ -9,8 +9,12 @@ describe("CLI snapshots", () => {
     expect(snapshot(parsed)).toMatchInlineSnapshot(`
       {
         "formula": {
-          "kvCache": "kv_cache = 2 x 1 x 4 x 8 x 128 x 2 x 0.5",
-          "total": "total = (weights + kv_cache) / 0.92",
+          "kvCache": "kv_cache = 2 x layers x kv_group_width x context x batch x kv_bytes_per_element 
+      	= 2 x 1 x 2 x 8 x 128 x 2 
+      	= 8192",
+          "total": "total = (weights + kv_cache) / utilization 
+      	= (1000 + 8192) / 0.92 
+      	= 9991.304347826086",
         },
         "missing": [],
         "mode": "vllm",
@@ -18,12 +22,16 @@ describe("CLI snapshots", () => {
         "resolved": [
           "weightBytes:1000:metadata",
           "layers:1:metadata",
-          "hiddenSize:4:metadata",
+          "kvGroupWidth:2:metadata",
           "context:8:metadata",
           "batch:128:metadata",
           "kvBytes:2:metadata",
-          "gqa:0.5:metadata",
           "utilization:0.92:runtime-default",
+          "hiddenSize:4:metadata",
+          "attentionHeads:2:metadata",
+          "kvHeads:1:metadata",
+          "headDim:2:metadata",
+          "gqa:0.5:metadata",
         ],
         "totalBytes": 9991.304347826086,
       }
@@ -38,8 +46,11 @@ describe("CLI snapshots", () => {
     expect(snapshot(parsed)).toMatchInlineSnapshot(`
       {
         "formula": {
-          "kvCache": "kv_cache = layers x hidden x context x parallel x (cache_bytes_k + cache_bytes_v) x gqa = 1 x 4 x 8 x 1 x (2 + 2) x 0.5",
-          "total": "total = (weights + kv_cache) / 1",
+          "kvCache": "kv_cache = layers x kv_group_width x context x parallel x (cache_bytes_k + cache_bytes_v) 
+      	= 1 x 2 x 8 x 1 x (2 + 2)",
+          "total": "total = (weights + kv_cache) / utilization 
+      	= (64 + 64) / 1 
+      	= 128",
         },
         "missing": [],
         "mode": "llamacpp",
@@ -47,12 +58,17 @@ describe("CLI snapshots", () => {
         "resolved": [
           "weightBytes:64:metadata",
           "layers:1:metadata",
-          "hiddenSize:4:metadata",
+          "kvGroupWidth:2:metadata",
           "context:8:metadata",
           "batch:1:metadata",
           "kvBytes:2:runtime-default",
-          "gqa:0.5:metadata",
           "utilization:1:runtime-default",
+          "hiddenSize:4:metadata",
+          "attentionHeads:2:metadata",
+          "kvHeads:1:metadata",
+          "headDimK:2:metadata",
+          "headDimV:2:metadata",
+          "gqa:0.5:metadata",
         ],
         "totalBytes": 128,
       }
@@ -69,9 +85,8 @@ describe("CLI snapshots", () => {
         "missing": [
           "kvBytes",
           "layers",
-          "hiddenSize",
+          "kvGroupWidth",
           "context",
-          "gqa",
         ],
         "mode": "vllm",
         "ok": false,

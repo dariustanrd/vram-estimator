@@ -195,8 +195,8 @@ function OverrideFields({
 }) {
   const fields =
     mode === "vllm"
-      ? ["weightBytes", "layers", "hiddenSize", "attentionHeads", "kvHeads", "gqa", "kvBytes", "modelDtype"]
-      : ["weightBytes", "layers", "hiddenSize", "attentionHeads", "kvHeads", "gqa", "cacheBytesK", "cacheBytesV"];
+      ? ["weightBytes", "layers", "hiddenSize", "attentionHeads", "kvHeads", "headDim", "gqa", "kvBytes", "modelDtype"]
+      : ["weightBytes", "layers", "hiddenSize", "attentionHeads", "kvHeads", "headDim", "gqa", "cacheBytesK", "cacheBytesV"];
 
   return (
     <details>
@@ -239,6 +239,17 @@ function ResultView({ result, memoryUnit }: { result: EstimateResult; memoryUnit
           <Metric label="Total" value={formatMemory(result.memory.total, memoryUnit)} />
         </div>
       )}
+      {result.notes.length > 0 && (
+        <div className="notice assumptions">
+          <strong>Assumptions &amp; caveats</strong>
+          <p>This estimate uses simplifying assumptions. Read these before trusting the total for capacity planning.</p>
+          <ul>
+            {result.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} />}
       <Panel title="Resolved Inputs">
         <pre>{JSON.stringify(result.resolvedInputs, null, 2)}</pre>
@@ -246,15 +257,6 @@ function ResultView({ result, memoryUnit }: { result: EstimateResult; memoryUnit
       <Panel title="Sources">
         <pre>{JSON.stringify({ model: result.modelSources, runtime: result.runtimeSources }, null, 2)}</pre>
       </Panel>
-      {result.notes.length > 0 && (
-        <Panel title="Notes">
-          <ul>
-            {result.notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
-        </Panel>
-      )}
     </div>
   );
 }
@@ -272,12 +274,23 @@ function CalculationView({ result, memoryUnit }: { result: EstimateResult; memor
         <h3>What the numbers mean</h3>
         <VariableRow name="exact_weight_bytes" description="Exact model weight bytes from Hugging Face file metadata or the GGUF tensor table." value={result.resolvedInputs.weightBytes} />
         <VariableRow name="layers" description="Transformer block count." value={result.resolvedInputs.layers} />
-        <VariableRow name="hidden" description="Model hidden size / embedding length." value={result.resolvedInputs.hiddenSize} />
+        <VariableRow name="kv_group_width" description="num_key_value_heads x head_dim: the exact per-token, per-layer element width of one K or V tensor. Replaces the old hidden_size x gqa shortcut, which is wrong whenever head_dim differs from hidden_size / num_attention_heads." value={result.resolvedInputs.kvGroupWidth} />
+        <VariableRow name="hidden_size" description="Raw model hidden size / embedding length, shown for reference only (no longer used directly in the KV cache formula)." value={result.resolvedInputs.hiddenSize} />
+        <VariableRow name="attention_heads" description="Number of query attention heads." value={result.resolvedInputs.attentionHeads} />
+        <VariableRow name="kv_heads" description="Number of key/value heads (equal to attention_heads unless the model uses grouped-query attention)." value={result.resolvedInputs.kvHeads} />
+        {result.mode === "vllm" ? (
+          <VariableRow name="head_dim" description="Dimension of each attention head. Read from an explicit config field when available; otherwise assumed from hidden_size / attention_heads (flagged under Assumptions above when used)." value={result.resolvedInputs.headDim} />
+        ) : (
+          <>
+            <VariableRow name="head_dim_k" description="Key head dimension. Read from GGUF attention.key_length when available; otherwise assumed from embedding_length / attention.head_count (flagged under Assumptions above when used)." value={result.resolvedInputs.headDimK} />
+            <VariableRow name="head_dim_v" description="Value head dimension. Read from GGUF attention.value_length when available; otherwise assumed from embedding_length / attention.head_count (flagged under Assumptions above when used)." value={result.resolvedInputs.headDimV} />
+          </>
+        )}
         <VariableRow name="context" description="Tokens in the requested or metadata context window." value={result.resolvedInputs.context} />
-        <VariableRow name={result.mode === "vllm" ? "batch" : "parallel"} description={result.mode === "vllm" ? "Concurrent sequences used for the estimate." : "llama.cpp parallel sequence count."} value={result.resolvedInputs.batch} />
-        <VariableRow name="kv_bytes" description={result.mode === "vllm" ? "Bytes per KV cache element from explicit KV dtype/model dtype." : "Average bytes per K/V cache element from selected cache types."} value={result.resolvedInputs.kvBytes} />
-        <VariableRow name="gqa" description="Grouped-query attention ratio: key/value heads divided by attention heads." value={result.resolvedInputs.gqa} />
-        <VariableRow name="utilization" description="Runtime memory utilization divisor from the selected runtime defaults." value={result.resolvedInputs.utilization} />
+        <VariableRow name={result.mode === "vllm" ? "batch" : "parallel"} description={result.mode === "vllm" ? "Concurrent sequences used for the estimate (worst case: each assumed to use the full context)." : "llama.cpp parallel slot count (context is reserved per slot; total reserved = context x parallel)."} value={result.resolvedInputs.batch} />
+        <VariableRow name="kv_bytes" description={result.mode === "vllm" ? "Bytes per KV cache element from explicit KV dtype/model dtype." : "Average bytes per K/V cache element from selected cache types, using exact GGUF block/type sizes."} value={result.resolvedInputs.kvBytes} />
+        <VariableRow name="gqa" description="Grouped-query attention ratio (kv_heads / attention_heads), shown for reference; the KV cache formula uses kv_group_width directly." value={result.resolvedInputs.gqa} />
+        <VariableRow name="utilization" description="Runtime memory utilization divisor from the selected runtime defaults. Overhead is a modeled residual, not measured activation memory - see Assumptions above." value={result.resolvedInputs.utilization} />
       </div>
     </Panel>
   );
@@ -310,7 +323,10 @@ function VariableRow({
         <strong>{name}</strong>
         <p>{description}</p>
       </div>
-      <code>{value ? `${String(value.value)} (${value.providedBy}; ${value.source})` : "missing"}</code>
+      <code className={value?.assumed ? "assumed-value" : undefined}>
+        {value ? `${String(value.value)} (${value.providedBy}; ${value.source})` : "missing"}
+        {value?.assumed ? " \u26a0 assumed" : ""}
+      </code>
     </div>
   );
 }

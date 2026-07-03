@@ -196,6 +196,27 @@ summary {
   color: #8d2c24;
 }
 
+.notice.assumptions {
+  background: #fff8e6;
+  border-color: #e8c876;
+  color: #6b5316;
+}
+
+.notice.assumptions strong {
+  color: #4d3b0f;
+}
+
+.notice.assumptions p {
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
+.notice.assumptions li {
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
 .notice ul {
   margin: 10px 0 0;
   padding-left: 18px;
@@ -288,6 +309,10 @@ summary {
 
 .variable-row code {
   font-size: 12px;
+}
+
+.variable-row code.assumed-value {
+  color: #8d6a1f;
 }
 
 code,

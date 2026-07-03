@@ -32,6 +32,13 @@ export type GroundTruthValue<T> = {
   value: T;
   source: string;
   providedBy: "metadata" | "user" | "runtime-default";
+  /**
+   * True when this value was not read directly from an exact metadata field but was
+   * derived using a simplifying assumption (e.g. head_dim = hidden_size / num_attention_heads
+   * when the model config does not expose head_dim explicitly). Callers should surface this
+   * to users since the underlying architecture may not satisfy the assumption.
+   */
+  assumed?: boolean | undefined;
 };
 
 export type MissingValue = {
@@ -88,6 +95,7 @@ export type VllmEstimateInput = {
     modelDtype: string;
     attentionHeads: number;
     kvHeads: number;
+    headDim: number;
   }> | undefined;
 };
 
@@ -110,5 +118,6 @@ export type LlamaCppEstimateInput = {
     gqa: number;
     attentionHeads: number;
     kvHeads: number;
+    headDim: number;
   }> | undefined;
 };
