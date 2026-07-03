@@ -56,6 +56,13 @@ h2 {
   font-size: 14px;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
 .segmented {
   background: #e9eef1;
   border: 1px solid #d5dde2;
@@ -64,6 +71,10 @@ h2 {
   grid-template-columns: repeat(2, 1fr);
   overflow: hidden;
   width: 220px;
+}
+
+.unit-toggle {
+  width: 120px;
 }
 
 .segmented button {
@@ -308,7 +319,12 @@ pre {
     display: grid;
   }
 
-  .segmented {
+  .topbar-actions {
+    justify-content: stretch;
+  }
+
+  .segmented,
+  .unit-toggle {
     width: 100%;
   }
 

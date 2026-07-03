@@ -20,6 +20,8 @@ export type RuntimeSnapshot = {
   defaults: Record<string, RuntimeDefault>;
 };
 
+export type MemoryUnit = "gb" | "gib";
+
 export type MemoryAmount = {
   bytes: number;
   gb: number;

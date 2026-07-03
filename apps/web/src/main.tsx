@@ -1,6 +1,6 @@
 import { StrictMode, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { EstimateResult, GroundTruthValue } from "@vram-estimator/core";
+import type { EstimateResult, GroundTruthValue, MemoryUnit } from "@vram-estimator/core";
 import { formatMemory } from "@vram-estimator/core";
 import "./styles.css";
 
@@ -8,6 +8,7 @@ type Mode = "vllm" | "llamacpp";
 
 function App() {
   const [mode, setMode] = useState<Mode>("vllm");
+  const [memoryUnit, setMemoryUnit] = useState<MemoryUnit>("gb");
   const [target, setTarget] = useState("");
   const [hfToken, setHfToken] = useState("");
   const [context, setContext] = useState("");
@@ -82,13 +83,23 @@ function App() {
           <h1>VRAM Estimator</h1>
           <p>Exact metadata in, transparent inference memory math out.</p>
         </div>
-        <div className="segmented" role="tablist">
-          <button className={mode === "vllm" ? "active" : ""} onClick={() => setMode("vllm")}>
-            vLLM
-          </button>
-          <button className={mode === "llamacpp" ? "active" : ""} onClick={() => setMode("llamacpp")}>
-            llama.cpp
-          </button>
+        <div className="topbar-actions">
+          <div className="segmented" role="tablist" aria-label="Estimator mode">
+            <button className={mode === "vllm" ? "active" : ""} onClick={() => setMode("vllm")}>
+              vLLM
+            </button>
+            <button className={mode === "llamacpp" ? "active" : ""} onClick={() => setMode("llamacpp")}>
+              llama.cpp
+            </button>
+          </div>
+          <div className="segmented unit-toggle" role="group" aria-label="Memory unit">
+            <button className={memoryUnit === "gb" ? "active" : ""} onClick={() => setMemoryUnit("gb")}>
+              GB
+            </button>
+            <button className={memoryUnit === "gib" ? "active" : ""} onClick={() => setMemoryUnit("gib")}>
+              GiB
+            </button>
+          </div>
         </div>
       </header>
 
@@ -166,7 +177,7 @@ function App() {
         <section className="results">
           {error && <div className="notice error">{error}</div>}
           {!result && !error && <div className="empty">Enter a model source to calculate weights, KV cache, overhead, and total memory.</div>}
-          {result && <ResultView result={result} />}
+          {result && <ResultView result={result} memoryUnit={memoryUnit} />}
         </section>
       </section>
     </main>
@@ -205,7 +216,7 @@ function OverrideFields({
   );
 }
 
-function ResultView({ result }: { result: EstimateResult }) {
+function ResultView({ result, memoryUnit }: { result: EstimateResult; memoryUnit: MemoryUnit }) {
   return (
     <div className="stack">
       {!result.ok && (
@@ -222,13 +233,13 @@ function ResultView({ result }: { result: EstimateResult }) {
       )}
       {result.memory && (
         <div className="metrics">
-          <Metric label="Weights" value={formatMemory(result.memory.weights)} />
-          <Metric label="KV cache" value={formatMemory(result.memory.kvCache)} />
-          <Metric label="Overhead" value={formatMemory(result.memory.overhead)} />
-          <Metric label="Total" value={formatMemory(result.memory.total)} />
+          <Metric label="Weights" value={formatMemory(result.memory.weights, memoryUnit)} />
+          <Metric label="KV cache" value={formatMemory(result.memory.kvCache, memoryUnit)} />
+          <Metric label="Overhead" value={formatMemory(result.memory.overhead, memoryUnit)} />
+          <Metric label="Total" value={formatMemory(result.memory.total, memoryUnit)} />
         </div>
       )}
-      {result.formula && <CalculationView result={result} />}
+      {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} />}
       <Panel title="Resolved Inputs">
         <pre>{JSON.stringify(result.resolvedInputs, null, 2)}</pre>
       </Panel>
@@ -248,14 +259,14 @@ function ResultView({ result }: { result: EstimateResult }) {
   );
 }
 
-function CalculationView({ result }: { result: EstimateResult }) {
+function CalculationView({ result, memoryUnit }: { result: EstimateResult; memoryUnit: MemoryUnit }) {
   return (
     <Panel title="Calculation">
       <div className="formula-list">
-        <FormulaLine label="Weights" formula={result.formula!.weights} />
-        <FormulaLine label="KV cache" formula={result.formula!.kvCache} />
-        <FormulaLine label="Total" formula={result.formula!.total} />
-        <FormulaLine label="Overhead" formula={result.formula!.overhead} />
+        <FormulaLine label="Weights" formula={result.formula!.weights} value={result.memory ? formatMemory(result.memory.weights, memoryUnit) : undefined} />
+        <FormulaLine label="KV cache" formula={result.formula!.kvCache} value={result.memory ? formatMemory(result.memory.kvCache, memoryUnit) : undefined} />
+        <FormulaLine label="Total" formula={result.formula!.total} value={result.memory ? formatMemory(result.memory.total, memoryUnit) : undefined} />
+        <FormulaLine label="Overhead" formula={result.formula!.overhead} value={result.memory ? formatMemory(result.memory.overhead, memoryUnit) : undefined} />
       </div>
       <div className="legend">
         <h3>What the numbers mean</h3>
@@ -272,11 +283,14 @@ function CalculationView({ result }: { result: EstimateResult }) {
   );
 }
 
-function FormulaLine({ label, formula }: { label: string; formula: string }) {
+function FormulaLine({ label, formula, value }: { label: string; formula: string; value?: string | undefined }) {
   return (
     <div className="formula-line">
       <span>{label}</span>
-      <code>{formula}</code>
+      <code>
+        {formula}
+        {value ? ` = ${value}` : ""}
+      </code>
     </div>
   );
 }
