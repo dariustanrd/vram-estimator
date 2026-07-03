@@ -111,6 +111,7 @@ export type VllmEstimateInput = {
   context?: number | undefined;
   batch?: number | undefined;
   kvDtype?: string | undefined;
+  gpuMemoryUtilization?: number | undefined;
   runtimeVersion?: string | undefined;
   gpuVramGb?: number | undefined;
   numGpus?: number | undefined;

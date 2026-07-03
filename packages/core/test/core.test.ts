@@ -109,6 +109,41 @@ describe("auth", () => {
 });
 
 describe("Hugging Face exact metadata", () => {
+  it("uses a user-provided vLLM gpu memory utilization", async () => {
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/models/")) {
+        return jsonResponse({
+          id: "org/tiny",
+          sha: "abc",
+          siblings: [{ rfilename: "model.safetensors", size: 1000 }]
+        });
+      }
+      if (url.endsWith("/config.json")) {
+        return jsonResponse({
+          torch_dtype: "float16",
+          num_hidden_layers: 1,
+          hidden_size: 4,
+          max_position_embeddings: 8,
+          num_attention_heads: 2,
+          num_key_value_heads: 1,
+          head_dim: 2
+        });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    };
+
+    const result = await estimateVllm({ model: "org/tiny", gpuMemoryUtilization: 0.5 }, fetcher as typeof fetch);
+
+    expect(result.ok).toBe(true);
+    expect(result.resolvedInputs.utilization).toMatchObject({
+      value: 0.5,
+      source: "user.gpuMemoryUtilization",
+      providedBy: "user"
+    });
+    expect(result.userOverrides.gpuMemoryUtilization).toBe(0.5);
+  });
+
   it("does not infer params or architecture from a model name", async () => {
     const fetcher = async (input: RequestInfo | URL) => {
       const url = String(input);

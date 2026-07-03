@@ -86,6 +86,7 @@ function App() {
   const [context, setContext] = useState("");
   const [batch, setBatch] = useState("");
   const [kvDtype, setKvDtype] = useState("auto");
+  const [gpuMemoryUtilization, setGpuMemoryUtilization] = useState("");
   const [cacheTypeK, setCacheTypeK] = useState("f16");
   const [cacheTypeV, setCacheTypeV] = useState("f16");
   const [gpuVramGb, setGpuVramGb] = useState("");
@@ -142,6 +143,8 @@ function App() {
     });
     if (defaulted.has("context")) setContext("");
     if (defaulted.has("batch")) setBatch("");
+    if (defaulted.has("gpuMemoryUtilization")) setGpuMemoryUtilization("");
+    if (defaulted.has("gpuVramGb")) setGpuVramGb("");
     setDefaulted(new Set());
     setResult(null);
     setError("");
@@ -157,6 +160,8 @@ function App() {
     const nextDefaulted = new Set(defaulted);
     let nextContext = context;
     let nextBatch = batch;
+    let nextGpuMemoryUtilization = gpuMemoryUtilization;
+    let nextGpuVramGb = gpuVramGb;
     const nextOverrides = { ...overrides };
 
     const apply = (
@@ -179,15 +184,28 @@ function App() {
     apply("batch", ri.batch, (value) => {
       nextBatch = value;
     });
+    if (mode === "vllm") {
+      apply("gpuMemoryUtilization", ri.utilization, (value) => {
+        nextGpuMemoryUtilization = value;
+      });
+    }
     for (const field of OVERRIDE_FIELDS[mode]) {
       const key = field.key === "headDim" && mode === "llamacpp" ? "headDimK" : field.key;
       apply(field.key, ri[key], (value) => {
         nextOverrides[field.key] = value;
       });
     }
+    if (data.hardware?.inferred) {
+      nextGpuVramGb = String(data.hardware.commonGpuVramGb ?? data.hardware.gpuVramPerGpu.gb);
+      nextDefaulted.add("gpuVramGb");
+    } else if (data.hardware) {
+      nextDefaulted.delete("gpuVramGb");
+    }
 
     setContext(nextContext);
     setBatch(nextBatch);
+    setGpuMemoryUtilization(nextGpuMemoryUtilization);
+    setGpuVramGb(nextGpuVramGb);
     setOverrides(nextOverrides);
     setDefaulted(nextDefaulted);
   }
@@ -205,7 +223,8 @@ function App() {
               context: defaulted.has("context") ? undefined : numberOrUndefined(context),
               batch: defaulted.has("batch") ? undefined : numberOrUndefined(batch),
               kvDtype: kvDtype || undefined,
-              gpuVramGb: numberOrUndefined(gpuVramGb),
+              gpuMemoryUtilization: defaulted.has("gpuMemoryUtilization") ? undefined : numberOrUndefined(gpuMemoryUtilization),
+              gpuVramGb: defaulted.has("gpuVramGb") ? undefined : numberOrUndefined(gpuVramGb),
               numGpus: numberOrUndefined(numGpus),
               overrides: parsedOverrides
             }
@@ -216,7 +235,7 @@ function App() {
               parallel: defaulted.has("batch") ? undefined : numberOrUndefined(batch),
               cacheTypeK,
               cacheTypeV,
-              gpuVramGb: numberOrUndefined(gpuVramGb),
+              gpuVramGb: defaulted.has("gpuVramGb") ? undefined : numberOrUndefined(gpuVramGb),
               numGpus: numberOrUndefined(numGpus),
               overrides: parsedOverrides
             };
@@ -326,15 +345,35 @@ function App() {
               </label>
             </div>
             {mode === "vllm" ? (
-              <label>
-                <code className="flag">--kv-cache-dtype</code>
-                <select value={kvDtype} onChange={(event) => setKvDtype(event.target.value)}>
-                  <option value="auto">auto</option>
-                  <option value="fp8">fp8</option>
-                  <option value="fp8_e5m2">fp8_e5m2</option>
-                  <option value="fp8_e4m3">fp8_e4m3</option>
-                </select>
-              </label>
+              <div className="grid2">
+                <label>
+                  <code className="flag">--kv-cache-dtype</code>
+                  <select value={kvDtype} onChange={(event) => setKvDtype(event.target.value)}>
+                    <option value="auto">auto</option>
+                    <option value="fp8">fp8</option>
+                    <option value="fp8_e5m2">fp8_e5m2</option>
+                    <option value="fp8_e4m3">fp8_e4m3</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="field-label">
+                    <code className="flag">--gpu-memory-utilization</code>
+                    {defaulted.has("gpuMemoryUtilization") && <DefaultTag />}
+                  </span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    max="1"
+                    step="0.01"
+                    value={gpuMemoryUtilization}
+                    onChange={(event) => {
+                      setGpuMemoryUtilization(event.target.value);
+                      unmarkDefault("gpuMemoryUtilization");
+                    }}
+                    placeholder="runtime default"
+                  />
+                </label>
+              </div>
             ) : (
               <div className="grid2">
                 <label>
@@ -363,13 +402,19 @@ function App() {
               </span>
               <div className="grid2">
                 <label>
-                  VRAM amount per GPU (GB)
+                  <span className="field-label">
+                    VRAM amount per GPU (GB)
+                    {defaulted.has("gpuVramGb") && <DefaultTag />}
+                  </span>
                   <input
                     type="number"
                     min="0"
                     step="0.1"
                     value={gpuVramGb}
-                    onChange={(event) => setGpuVramGb(event.target.value)}
+                    onChange={(event) => {
+                      setGpuVramGb(event.target.value);
+                      unmarkDefault("gpuVramGb");
+                    }}
                     placeholder="infer"
                   />
                 </label>

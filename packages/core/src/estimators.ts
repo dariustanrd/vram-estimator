@@ -31,6 +31,7 @@ export async function estimateVllm(
     context: input.context,
     batch: input.batch,
     kvDtype: input.kvDtype,
+    gpuMemoryUtilization: input.gpuMemoryUtilization,
     gpuVramGb: input.gpuVramGb,
     numGpus: input.numGpus
   });
@@ -107,8 +108,10 @@ export async function estimateVllm(
     "override.weightBytes",
     metadata.weightFiles.length > 0 ? "hf.weight_file_sizes" : "hf.metadata"
   );
-  const utilization = gt(
+  const utilization = valueWithOverride(
+    input.gpuMemoryUtilization,
     defaults.gpu_memory_utilization?.value as number | undefined,
+    "user.gpuMemoryUtilization",
     "runtime.gpu_memory_utilization",
     "runtime-default"
   );

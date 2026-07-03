@@ -170,11 +170,16 @@ code.flag {
 }
 
 .field-label {
-  align-items: flex-start;
+  align-items: baseline;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
+}
+
+.field-label .flag {
+  flex: 0 0 auto;
+  max-width: 100%;
 }
 
 .default-tag {
@@ -182,11 +187,14 @@ code.flag {
   border-radius: 10px;
   color: #5b6b74;
   cursor: help;
+  flex: 0 0 auto;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  line-height: 1.4;
   padding: 1px 7px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 input,
@@ -212,6 +220,15 @@ select:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.grid2 label,
+.override-grid label {
+  align-items: start;
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+  min-width: 0;
+}
+
 details {
   border-top: 1px solid #e4eaee;
   padding-top: 12px;
@@ -230,19 +247,7 @@ summary {
   margin-top: 12px;
 }
 
-.override-grid label {
-  min-width: 0;
-}
 
-.override-grid .flag {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.override-grid .default-tag {
-  flex-shrink: 0;
-}
 
 .primary {
   background: #1f6f78;
