@@ -46,6 +46,53 @@ describe("calculator", () => {
     expect(result.ok).toBe(false);
     expect(result.missing.map((item) => item.field)).toContain("weightBytes");
   });
+
+  it("estimates hardware KV capacity from supplied GPU VRAM", () => {
+    const result = calculateEstimate({
+      mode: "vllm",
+      weightBytes: { value: 16_000_000_000, source: "fixture", providedBy: "metadata" },
+      layers: { value: 32, source: "fixture", providedBy: "metadata" },
+      kvGroupWidth: { value: 1024, source: "fixture", providedBy: "metadata" },
+      context: { value: 8192, source: "fixture", providedBy: "metadata" },
+      batch: { value: 1, source: "fixture", providedBy: "metadata" },
+      kvBytes: { value: 2, source: "fixture", providedBy: "metadata" },
+      utilization: { value: 0.9, source: "fixture", providedBy: "runtime-default" },
+      hardware: { gpuVramGb: 24, numGpus: 1 },
+      userOverrides: {},
+      modelSources: [],
+      runtimeSources: []
+    });
+    expect(result.ok).toBe(true);
+    expect(result.hardware?.inferred).toBe(false);
+    expect(result.hardware?.availableKvCache.bytes).toBe(5_600_000_000);
+    expect(result.hardware?.gpuKvCacheBlocks).toBe(2670);
+    expect(result.hardware?.blocksPerFullContext).toBe(512);
+    expect(result.hardware?.rawKvCacheTokenSlots).toBe(42_720);
+    expect(result.hardware?.gpuKvCacheTokens).toBe(42_720);
+  });
+
+  it("matches vLLM's block-rounded logged KV token capacity", () => {
+    const result = calculateEstimate({
+      mode: "vllm",
+      weightBytes: { value: 0, source: "fixture", providedBy: "metadata" },
+      layers: { value: 1, source: "fixture", providedBy: "metadata" },
+      kvGroupWidth: { value: 1, source: "fixture", providedBy: "metadata" },
+      context: { value: 17, source: "fixture", providedBy: "metadata" },
+      batch: { value: 1, source: "fixture", providedBy: "metadata" },
+      kvBytes: { value: 1, source: "fixture", providedBy: "metadata" },
+      utilization: { value: 1, source: "fixture", providedBy: "runtime-default" },
+      hardware: { gpuVramGb: 0.00000032, numGpus: 1 },
+      userOverrides: {},
+      modelSources: [],
+      runtimeSources: []
+    });
+    expect(result.ok).toBe(true);
+    expect(result.hardware?.gpuKvCacheBlocks).toBe(10);
+    expect(result.hardware?.rawKvCacheTokenSlots).toBe(160);
+    expect(result.hardware?.blocksPerFullContext).toBe(2);
+    expect(result.hardware?.maxFullContextConcurrency).toBe(5);
+    expect(result.hardware?.gpuKvCacheTokens).toBe(85);
+  });
 });
 
 describe("runtime defaults", () => {

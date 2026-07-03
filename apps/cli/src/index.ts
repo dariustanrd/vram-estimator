@@ -49,6 +49,8 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
       batch: numberFlag(parsed, "max-num-seqs", "batch"),
       kvDtype: stringFlag(parsed, "kv-cache-dtype", "kv-dtype"),
       runtimeVersion: stringFlag(parsed, "runtime-version"),
+      gpuVramGb: numberFlag(parsed, "gpu-vram-gb"),
+      numGpus: numberFlag(parsed, "num-gpus"),
       overrides: parseOverrides(parsed)
     };
     printJson(await estimateVllm(input, fetcher), write);
@@ -64,6 +66,8 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
       cacheTypeK: stringFlag(parsed, "cache-type-k"),
       cacheTypeV: stringFlag(parsed, "cache-type-v"),
       runtimeVersion: stringFlag(parsed, "runtime-version"),
+      gpuVramGb: numberFlag(parsed, "gpu-vram-gb"),
+      numGpus: numberFlag(parsed, "num-gpus"),
       overrides: parseOverrides(parsed)
     };
     printJson(await estimateLlamaCpp(input, fetcher), write);
@@ -173,8 +177,8 @@ function printHelp(write: (text: string) => void): void {
   write(`vram-estimator
 
 Commands:
-  vllm <hf-model-id-or-config-url> [--max-model-len N] [--max-num-seqs N] [--kv-cache-dtype DTYPE] [--hf-token TOKEN] [--runtime-version VERSION]
-  llamacpp <gguf-url-or-repo::file> [--ctx-size N] [--parallel N] [--cache-type-k TYPE] [--cache-type-v TYPE] [--hf-token TOKEN] [--runtime-version VERSION]
+  vllm <hf-model-id-or-config-url> [--max-model-len N] [--max-num-seqs N] [--kv-cache-dtype DTYPE] [--gpu-vram-gb N] [--num-gpus N] [--hf-token TOKEN] [--runtime-version VERSION]
+  llamacpp <gguf-url-or-repo::file> [--ctx-size N] [--parallel N] [--cache-type-k TYPE] [--cache-type-v TYPE] [--gpu-vram-gb N] [--num-gpus N] [--hf-token TOKEN] [--runtime-version VERSION]
   runtime-defaults
 
 vLLM model overrides (Hugging Face config.json fields):

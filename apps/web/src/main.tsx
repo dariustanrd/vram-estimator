@@ -5,7 +5,8 @@ import { formatMemory, memory } from "@vram-estimator/core";
 import "./styles.css";
 
 type Mode = "vllm" | "llamacpp";
-type Origin = "you" | "default" | "model" | "assumed" | "missing";
+type Origin = "you" | "default" | "model" | "hardware" | "assumed" | "missing";
+type ResultSelection = { kind: "concurrency"; seqs: number } | { kind: "hardware" };
 
 /**
  * Per-tab we stick to ONE naming convention so the UI matches what the user reads and types
@@ -87,6 +88,8 @@ function App() {
   const [kvDtype, setKvDtype] = useState("auto");
   const [cacheTypeK, setCacheTypeK] = useState("f16");
   const [cacheTypeV, setCacheTypeV] = useState("f16");
+  const [gpuVramGb, setGpuVramGb] = useState("");
+  const [numGpus, setNumGpus] = useState("1");
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   // Field keys whose current value was auto-filled from a runtime/model default after an estimate
   // (not typed by the user). These are shown for transparency but are NOT sent back as explicit
@@ -202,6 +205,8 @@ function App() {
               context: defaulted.has("context") ? undefined : numberOrUndefined(context),
               batch: defaulted.has("batch") ? undefined : numberOrUndefined(batch),
               kvDtype: kvDtype || undefined,
+              gpuVramGb: numberOrUndefined(gpuVramGb),
+              numGpus: numberOrUndefined(numGpus),
               overrides: parsedOverrides
             }
           : {
@@ -211,6 +216,8 @@ function App() {
               parallel: defaulted.has("batch") ? undefined : numberOrUndefined(batch),
               cacheTypeK,
               cacheTypeV,
+              gpuVramGb: numberOrUndefined(gpuVramGb),
+              numGpus: numberOrUndefined(numGpus),
               overrides: parsedOverrides
             };
       const response = await fetch(endpoint, {
@@ -257,14 +264,15 @@ function App() {
 
       <section className="workspace">
         <form
-          className="panel controls"
+          className="controls"
           onSubmit={(event) => {
             event.preventDefault();
             void submit();
           }}
         >
-          <div className="control-group">
-            <span className="group-label">Model</span>
+          <section className="control-card">
+            <div className="control-group">
+              <span className="group-label">Model</span>
             <label>
               {mode === "vllm" ? "Hugging Face model" : "GGUF source"}
               <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={placeholder} />
@@ -278,12 +286,15 @@ function App() {
                 placeholder="Optional, used only for this lookup"
               />
             </label>
-          </div>
+              <p className="token-note">Tokens are sent for the current lookup only and are not stored by this app.</p>
+            </div>
+          </section>
 
-          <div className="control-group">
-            <span className="group-label">
-              {RUNTIME_LABEL[mode]} flags <em>&mdash; blank uses the runtime default</em>
-            </span>
+          <section className="control-card">
+            <div className="control-group">
+              <span className="group-label">
+                {RUNTIME_LABEL[mode]} flags <em>&mdash; blank uses the runtime default</em>
+              </span>
             <div className="grid2">
               <label>
                 <span className="field-label">
@@ -339,14 +350,51 @@ function App() {
                   </select>
                 </label>
               </div>
-            )}
-          </div>
+              )}
+            </div>
 
-          <OverrideFields mode={mode} overrides={overrides} defaulted={defaulted} updateOverride={updateOverride} />
-          <button className="primary" disabled={loading || !target.trim()}>
-            {loading ? "Estimating\u2026" : "Estimate"}
-          </button>
-          <p className="token-note">Tokens are sent for the current lookup only and are not stored by this app.</p>
+            <OverrideFields mode={mode} overrides={overrides} defaulted={defaulted} updateOverride={updateOverride} />
+          </section>
+
+          <section className="control-card">
+            <div className="control-group">
+              <span className="group-label">
+                GPU hardware <em>&mdash; blank VRAM infers the smallest common GPU that fits one full context</em>
+              </span>
+              <div className="grid2">
+                <label>
+                  VRAM amount per GPU (GB)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={gpuVramGb}
+                    onChange={(event) => setGpuVramGb(event.target.value)}
+                    placeholder="infer"
+                  />
+                </label>
+                <label>
+                  Num GPUs
+                  <input
+                    type="number"
+                    min="1"
+                    max="1"
+                    step="1"
+                    value={numGpus}
+                    onChange={(event) => setNumGpus(event.target.value)}
+                    placeholder="1"
+                  />
+                </label>
+              </div>
+              <p className="token-note">Multi-GPU placement is not modeled yet; use 1 GPU for vLLM tensor_parallel_size=1 estimates.</p>
+            </div>
+          </section>
+
+          <section className="control-card submit-card">
+            <button className="primary" disabled={loading || !target.trim()}>
+              {loading ? "Estimating\u2026" : "Estimate"}
+            </button>
+          </section>
         </form>
 
         <section className="results">
@@ -441,10 +489,10 @@ function ResultView({
   cacheTypeV: string;
 }) {
   const configuredSeqs = numberValue(result.resolvedInputs.batch) ?? 1;
-  const [selectedSeqs, setSelectedSeqs] = useState(configuredSeqs);
+  const [selection, setSelection] = useState<ResultSelection>(() => defaultSelection(result, configuredSeqs));
 
   useEffect(() => {
-    setSelectedSeqs(configuredSeqs);
+    setSelection(defaultSelection(result, configuredSeqs));
   }, [configuredSeqs, result]);
 
   return (
@@ -462,7 +510,7 @@ function ResultView({
         </div>
       )}
       {result.memory && (
-        <SizesPanel result={result} memoryUnit={memoryUnit} selectedSeqs={selectedSeqs} onSelectSeqs={setSelectedSeqs} />
+        <SizesPanel result={result} memoryUnit={memoryUnit} selection={selection} onSelect={setSelection} />
       )}
       {result.ok && (
         <CommandView
@@ -471,16 +519,16 @@ function ResultView({
           kvDtype={kvDtype}
           cacheTypeK={cacheTypeK}
           cacheTypeV={cacheTypeV}
-          selectedSeqs={selectedSeqs}
+          selection={selection}
         />
       )}
       {result.notes.length > 0 && <AssumptionsView notes={result.notes} />}
-      {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} selectedSeqs={selectedSeqs} />}
+      {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} selection={selection} />}
       <details className="panel">
         <summary>Raw resolved inputs &amp; sources</summary>
         <div className="panel-body">
           <pre>{JSON.stringify(result.resolvedInputs, null, 2)}</pre>
-          <pre>{JSON.stringify({ model: result.modelSources, runtime: result.runtimeSources }, null, 2)}</pre>
+          <pre>{JSON.stringify({ model: result.modelSources, runtime: result.runtimeSources, hardware: result.hardware }, null, 2)}</pre>
         </div>
       </details>
     </div>
@@ -492,13 +540,13 @@ type FlagRow = { flag: string; value: string; origin: Origin };
 function SizesPanel({
   result,
   memoryUnit,
-  selectedSeqs,
-  onSelectSeqs
+  selection,
+  onSelect
 }: {
   result: EstimateResult;
   memoryUnit: MemoryUnit;
-  selectedSeqs: number;
-  onSelectSeqs: (seqs: number) => void;
+  selection: ResultSelection;
+  onSelect: (selection: ResultSelection) => void;
 }) {
   const mem = result.memory!;
   const util = numberValue(result.resolvedInputs.utilization) ?? 1;
@@ -506,6 +554,7 @@ function SizesPanel({
   const weightsBytes = mem.weights.bytes;
   const kvPerSeqBytes = configuredSeqs > 0 ? mem.kvCache.bytes / configuredSeqs : mem.kvCache.bytes;
   const dtype = result.resolvedInputs.weightDtype?.value;
+  const hardware = result.hardware;
 
   const unitWord = result.mode === "vllm" ? "sequence" : "slot";
   const batchProvidedBy = result.resolvedInputs.batch?.providedBy;
@@ -551,10 +600,10 @@ function SizesPanel({
           return (
             <button
               type="button"
-              className={`scenario-card${selectedSeqs === scenario.seqs ? " active" : ""}`}
+              className={`scenario-card${selection.kind === "concurrency" && selection.seqs === scenario.seqs ? " active" : ""}`}
               key={scenario.title}
-              onClick={() => onSelectSeqs(scenario.seqs)}
-              aria-pressed={selectedSeqs === scenario.seqs}
+              onClick={() => onSelect({ kind: "concurrency", seqs: scenario.seqs })}
+              aria-pressed={selection.kind === "concurrency" && selection.seqs === scenario.seqs}
             >
               <div className="scenario-head">
                 <span className="scenario-count">
@@ -580,6 +629,39 @@ function SizesPanel({
             </button>
           );
         })}
+        {hardware && result.mode === "vllm" && (
+          <button
+            type="button"
+            className={`scenario-card${selection.kind === "hardware" ? " active" : ""}${hardware.fitsFullContext ? "" : " warning"}`}
+            onClick={() => onSelect({ kind: "hardware" })}
+            aria-pressed={selection.kind === "hardware"}
+          >
+            <div className="scenario-head">
+              <span className="scenario-count">
+                {formatConcurrency(hardware.maxFullContextConcurrency)}
+                <small>× {unitWord}</small>
+              </span>
+              <div className="scenario-title">
+                <strong>Hardware capacity</strong>
+                <span>
+                  {hardware.inferred ? "inferred" : "your"} {formatMemory(hardware.gpuVramPerGpu, memoryUnit)} × {hardware.numGpus} GPU · no --max-num-seqs
+                </span>
+              </div>
+            </div>
+            <div className="scenario-stats">
+              <div className="scenario-stat">
+                <span>KV cache</span>
+                <strong>{formatMemory(hardware.allocatedKvCache, memoryUnit)}</strong>
+                <em>{formatInteger(hardware.gpuKvCacheTokens)} vLLM tokens / {formatInteger(hardware.gpuKvCacheBlocks)} blocks</em>
+              </div>
+              <div className="scenario-stat total">
+                <span>Total used</span>
+                <strong>{formatMemory(hardware.totalUsed, memoryUnit)}</strong>
+                <em>{formatMemory(hardware.unusedHeadroom, memoryUnit)} reserved/free</em>
+              </div>
+            </div>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -591,14 +673,14 @@ function CommandView({
   kvDtype,
   cacheTypeK,
   cacheTypeV,
-  selectedSeqs
+  selection
 }: {
   result: EstimateResult;
   target: string;
   kvDtype: string;
   cacheTypeK: string;
   cacheTypeV: string;
-  selectedSeqs: number;
+  selection: ResultSelection;
 }) {
   const [copied, setCopied] = useState(false);
   const ri = result.resolvedInputs;
@@ -611,18 +693,27 @@ function CommandView({
         ? `-hf ${target.replace("::", ":")}`
         : `-m ${target || "<model.gguf>"}`;
 
+  const selectedSeqs = selection.kind === "concurrency" ? selection.seqs : numberValue(ri.batch) ?? 1;
+  const selectedOrigin: Origin = selectedSeqs === numberValue(ri.batch) ? originOf(ri.batch) : "you";
   const flags: FlagRow[] =
     result.mode === "vllm"
-      ? [
-          { flag: "--max-model-len", value: valueStr(ri.context), origin: originOf(ri.context) },
-          { flag: "--max-num-seqs", value: String(selectedSeqs), origin: selectedSeqs === numberValue(ri.batch) ? originOf(ri.batch) : "you" },
-          { flag: "--kv-cache-dtype", value: kvDtype, origin: kvDtype === "auto" ? "default" : "you" },
-          { flag: "--gpu-memory-utilization", value: valueStr(ri.utilization), origin: originOf(ri.utilization) },
-          { flag: "--tensor-parallel-size", value: "1", origin: "default" }
-        ]
+      ? selection.kind === "hardware"
+        ? [
+            { flag: "--max-model-len", value: valueStr(ri.context), origin: originOf(ri.context) },
+            { flag: "--kv-cache-dtype", value: kvDtype, origin: kvDtype === "auto" ? "default" : "you" },
+            { flag: "--gpu-memory-utilization", value: valueStr(ri.utilization), origin: originOf(ri.utilization) },
+            { flag: "--tensor-parallel-size", value: "1", origin: "default" }
+          ]
+        : [
+            { flag: "--max-model-len", value: valueStr(ri.context), origin: originOf(ri.context) },
+            { flag: "--max-num-seqs", value: String(selectedSeqs), origin: selectedOrigin },
+            { flag: "--kv-cache-dtype", value: kvDtype, origin: kvDtype === "auto" ? "default" : "you" },
+            { flag: "--gpu-memory-utilization", value: valueStr(ri.utilization), origin: originOf(ri.utilization) },
+            { flag: "--tensor-parallel-size", value: "1", origin: "default" }
+          ]
       : [
           { flag: "--ctx-size", value: valueStr(ri.context), origin: originOf(ri.context) },
-          { flag: "--parallel", value: String(selectedSeqs), origin: selectedSeqs === numberValue(ri.batch) ? originOf(ri.batch) : "you" },
+          { flag: "--parallel", value: String(selectedSeqs), origin: selectedOrigin },
           { flag: "--cache-type-k", value: cacheTypeK, origin: cacheTypeK === "f16" ? "default" : "you" },
           { flag: "--cache-type-v", value: cacheTypeV, origin: cacheTypeV === "f16" ? "default" : "you" },
           { flag: "--n-gpu-layers", value: "999", origin: "default" }
@@ -649,7 +740,11 @@ function CommandView({
         </button>
       </div>
       <div className="panel-body">
-        <p className="hint">These are the {bin} flags for the selected {result.mode === "vllm" ? "sequence" : "slot"} concurrency.</p>
+        <p className="hint">
+          {selection.kind === "hardware"
+            ? `Hardware capacity is not configured with --max-num-seqs. Start vLLM with the memory/model flags below; vLLM profiles memory, allocates KV cache blocks, and reports the maximum concurrency in the startup logs.`
+            : `These are the ${bin} flags for the selected ${result.mode === "vllm" ? "sequence" : "slot"} concurrency.`}
+        </p>
         <pre className="command">{formatCommand(bin, modelArg, flags)}</pre>
         <div className="flag-table">
           {flags.map((row) => (
@@ -680,7 +775,12 @@ function AssumptionsView({ notes }: { notes: string[] }) {
   );
 }
 
-function CalculationView({ result, memoryUnit, selectedSeqs }: { result: EstimateResult; memoryUnit: MemoryUnit; selectedSeqs: number }) {
+function CalculationView({ result, memoryUnit, selection }: { result: EstimateResult; memoryUnit: MemoryUnit; selection: ResultSelection }) {
+  if (selection.kind === "hardware" && result.hardware) {
+    return <HardwareCalculationView result={result} memoryUnit={memoryUnit} />;
+  }
+
+  const selectedSeqs = selection.kind === "concurrency" ? selection.seqs : selectedCommandSeqs(result, selection);
   const variables = VARIABLES[result.mode];
   const mem = result.memory!;
   const configuredSeqs = numberValue(result.resolvedInputs.batch) ?? 1;
@@ -727,6 +827,67 @@ function CalculationView({ result, memoryUnit, selectedSeqs }: { result: Estimat
   );
 }
 
+function HardwareCalculationView({ result, memoryUnit }: { result: EstimateResult; memoryUnit: MemoryUnit }) {
+  const hardware = result.hardware!;
+  const ri = result.resolvedInputs;
+  const util = numberValue(ri.utilization) ?? 1;
+  const weightsBytes = result.memory!.weights.bytes;
+  const layers = numberValue(ri.layers) ?? 0;
+  const kvGroupWidth = numberValue(ri.kvGroupWidth) ?? 0;
+  const kvBytes = numberValue(ri.kvBytes) ?? 0;
+  const context = numberValue(ri.context) ?? 0;
+  const perTokenPerLayerBytes = 2 * kvGroupWidth * kvBytes;
+  const logicalFullContextKvBytes = hardware.kvBytesPerToken * context;
+  const blockRoundedFullContextKvBytes = hardware.blocksPerFullContext * hardware.kvBlockBytes;
+  const requestedBytes = hardware.gpuMemoryBudget.bytes;
+  const nonKvBytes = weightsBytes;
+
+  return (
+    <div className="panel">
+      <h2>How hardware capacity was calculated</h2>
+      <div className="panel-body">
+        <p className="hint">
+          Simplified vLLM-style supply-side calculation. vLLM first budgets GPU memory with{" "}
+          <code className="inline-code">gpu_memory_utilization</code>, profiles non-KV memory, then allocates KV blocks from the remainder.
+          This estimator uses model weights as the known non-KV component; runtime profiling overhead can reduce the real log value.
+        </p>
+        <div className="formula-list">
+          <FormulaLine
+            label="Requested GPU budget"
+            formula={`requested_memory = total_gpu_vram x gpu_memory_utilization \n\t= ${hardware.totalGpuVram.bytes} x ${util} \n\t= ${requestedBytes}`}
+            value={formatMemory(hardware.gpuMemoryBudget, memoryUnit)}
+          />
+          <FormulaLine
+            label="Available KV memory"
+            formula={`available_kv_cache_memory = requested_memory - non_kv_cache_memory \n\t≈ ${requestedBytes} - ${nonKvBytes} \n\t= ${hardware.availableKvCache.bytes}`}
+            value={formatMemory(hardware.availableKvCache, memoryUnit)}
+          />
+          <FormulaLine
+            label="KV bytes per token"
+            formula={`per_token_per_layer = 2 x kv_group_width x kv_bytes_per_element \n\t= 2 x ${kvGroupWidth} x ${kvBytes} \n\t= ${perTokenPerLayerBytes}\nbytes_per_token_all_layers = per_token_per_layer x layers \n\t= ${perTokenPerLayerBytes} x ${layers} \n\t= ${hardware.kvBytesPerToken}`}
+            value={`${formatInteger(hardware.kvBytesPerToken)} bytes/token`}
+          />
+          <FormulaLine
+            label="KV blocks"
+            formula={`kv_block_bytes = bytes_per_token_all_layers x block_size \n\t= ${hardware.kvBytesPerToken} x ${hardware.blockSize} \n\t= ${hardware.kvBlockBytes}\ngpu_blocks = floor(available_kv_cache_memory / kv_block_bytes) \n\t= floor(${hardware.availableKvCache.bytes} / ${hardware.kvBlockBytes}) \n\t= ${hardware.gpuKvCacheBlocks}\nraw_token_slots = gpu_blocks x block_size \n\t= ${hardware.gpuKvCacheBlocks} x ${hardware.blockSize} \n\t= ${hardware.rawKvCacheTokenSlots}`}
+            value={`${formatInteger(hardware.gpuKvCacheBlocks)} blocks`}
+          />
+          <FormulaLine
+            label="Full-context concurrency"
+            formula={`logical_full_context_kv = bytes_per_token_all_layers x max_model_len \n\t= ${hardware.kvBytesPerToken} x ${context} \n\t= ${logicalFullContextKvBytes}\nblocks_per_full_context = ceil(max_model_len / block_size) \n\t= ceil(${context} / ${hardware.blockSize}) \n\t= ${hardware.blocksPerFullContext}\nblock_rounded_full_context_kv = blocks_per_full_context x kv_block_bytes \n\t= ${hardware.blocksPerFullContext} x ${hardware.kvBlockBytes} \n\t= ${blockRoundedFullContextKvBytes}\nmax_concurrency = gpu_blocks / blocks_per_full_context \n\t= ${hardware.gpuKvCacheBlocks} / ${hardware.blocksPerFullContext} \n\t= ${hardware.maxFullContextConcurrency} = ${formatConcurrency(hardware.maxFullContextConcurrency)}x\ngpu_kv_cache_tokens_logged = int(max_concurrency x max_model_len) \n\t= int(${hardware.maxFullContextConcurrency} x ${context}) \n\t= ${hardware.gpuKvCacheTokens}`}
+            value={`${formatInteger(hardware.gpuKvCacheTokens)} tokens`}
+          />
+          <FormulaLine
+            label="Total used"
+            formula={`Note: --max-num-seqs is not part of this capacity calculation. vLLM computes GPU KV blocks from available memory, then reports max concurrency as gpu_blocks / blocks_per_full_context and GPU KV cache size as int(max_concurrency x max_model_len).\n\nallocated_kv_cache = gpu_blocks x kv_block_bytes \n\t= ${hardware.gpuKvCacheBlocks} x ${hardware.kvBlockBytes} \n\t= ${hardware.allocatedKvCache.bytes}\ntotal_used = weights + allocated_kv_cache \n\t= ${weightsBytes} + ${hardware.allocatedKvCache.bytes} \n\t= ${hardware.totalUsed.bytes}`}
+            value={formatMemory(hardware.totalUsed, memoryUnit)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FormulaLine({ label, formula, value }: { label: string; formula: string; value?: string | undefined }) {
   return (
     <div className="formula-line">
@@ -763,6 +924,7 @@ function Badge({ origin }: { origin: Origin }) {
         "Default baked into the selected runtime version (vLLM / llama.cpp) and captured in this app's runtime-defaults snapshot. It does NOT come from the model."
     },
     model: { label: "model", title: "Read from the model's Hugging Face config.json / GGUF metadata." },
+    hardware: { label: "hardware", title: "Derived from the selected GPU hardware capacity estimate." },
     assumed: {
       label: "assumed",
       title: "Derived from a simplifying assumption (e.g. head_dim = hidden_size / heads); may be wrong for some architectures."
@@ -800,6 +962,27 @@ function valueStr(value: GroundTruthValue<unknown> | undefined): string {
 
 function numberValue(value: GroundTruthValue<unknown> | undefined): number | undefined {
   return value && typeof value.value === "number" ? value.value : undefined;
+}
+
+function formatConcurrency(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return value >= 10 ? value.toFixed(1) : value.toFixed(2);
+}
+
+function formatInteger(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Math.floor(value).toLocaleString();
+}
+
+function defaultSelection(result: EstimateResult, configuredSeqs: number): ResultSelection {
+  if (result.hardware && result.mode === "vllm") return { kind: "hardware" };
+  return { kind: "concurrency", seqs: configuredSeqs };
+}
+
+function selectedCommandSeqs(result: EstimateResult, selection: ResultSelection): number {
+  if (selection.kind === "concurrency") return selection.seqs;
+  const maxWholeConcurrency = Math.floor(result.hardware?.maxFullContextConcurrency ?? 0);
+  return Math.max(1, maxWholeConcurrency);
 }
 
 function formatCommand(bin: string, modelArg: string, flags: FlagRow[]): string {

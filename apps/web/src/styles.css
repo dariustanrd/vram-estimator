@@ -98,7 +98,7 @@ h2 {
 }
 
 .panel,
-.controls,
+.control-card,
 .notice,
 .empty {
   background: #ffffff;
@@ -109,8 +109,17 @@ h2 {
 .controls {
   align-self: start;
   display: grid;
-  gap: 20px;
+  gap: 18px;
+}
+
+.control-card {
+  display: grid;
+  gap: 16px;
   padding: 18px;
+}
+
+.submit-card {
+  padding: 10px 12px;
 }
 
 .control-group {
@@ -119,19 +128,25 @@ h2 {
 }
 
 .group-label {
-  color: #33424a;
+  align-items: baseline;
+  color: #172026;
+  display: flex;
+  flex-wrap: wrap;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
+  gap: 4px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .group-label em {
   color: #85939c;
+  font-size: 12px;
   font-style: normal;
   font-weight: 500;
-  text-transform: none;
   letter-spacing: 0;
+  line-height: 1.35;
+  text-transform: none;
 }
 
 label {
@@ -381,6 +396,10 @@ summary {
   color: #0f766e;
 }
 
+.scenario-card.warning {
+  border-color: #e8c876;
+}
+
 .scenario-head {
   align-items: center;
   background: #ffffff;
@@ -457,10 +476,14 @@ summary {
   color: #ffffff;
 }
 
-.scenario-stat.total em {
-  color: #cfe6e8;
+.scenario-stat em {
+  color: #66757e;
   font-size: 11px;
   font-style: normal;
+}
+
+.scenario-stat.total em {
+  color: #cfe6e8;
 }
 
 .metric {
@@ -572,6 +595,11 @@ summary {
   color: #1f7a4d;
 }
 
+.badge-hardware {
+  background: #e0f7f4;
+  color: #0f766e;
+}
+
 .badge-assumed {
   background: #fdf0d3;
   color: #8d6a1f;
@@ -661,6 +689,12 @@ pre {
   overflow-x: auto;
   padding: 10px;
   white-space: pre-wrap;
+}
+
+.inline-code {
+  display: inline;
+  padding: 1px 5px;
+  white-space: normal;
 }
 
 pre {

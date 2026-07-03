@@ -30,7 +30,9 @@ export async function estimateVllm(
     ...input.overrides,
     context: input.context,
     batch: input.batch,
-    kvDtype: input.kvDtype
+    kvDtype: input.kvDtype,
+    gpuVramGb: input.gpuVramGb,
+    numGpus: input.numGpus
   });
 
   const layers = valueWithOverride(
@@ -134,6 +136,7 @@ export async function estimateVllm(
     "vLLM v1 estimate is single GPU only with tensor_parallel_size=1.",
     "This is a deterministic estimate from exact metadata and selected runtime defaults, not observed runtime allocation.",
     `KV cache assumes ${batch?.value ?? "batch"} concurrent sequences each holding the full ${context?.value ?? "context"}-token context simultaneously (a worst-case capacity bound, defaulted from runtime.max_num_seqs and config.max_position_embeddings). Real vLLM allocates KV cache blocks dynamically from whatever memory is available and typically needs far less in normal traffic. Override context/batch to model your expected concurrency instead of relying on these defaults.`,
+    "The hardware capacity card uses supply-side budgeting: available_kv_cache = gpu_vram x gpu_memory_utilization - weights. vLLM's runtime profiler can reserve additional non-KV memory for CUDA graphs, activations, and non-torch allocations, so observed server logs may report a smaller KV cache than this deterministic budget unless those reserves are modeled separately.",
     "\"Overhead\" is a modeled residual computed as (weights + kv_cache) / gpu_memory_utilization - weights - kv_cache. It approximates activation memory, CUDA graphs, and allocator overhead as a fixed proportion of the utilization setting; it is not vLLM's actual memory-profiler output, which depends on max_num_batched_tokens and intermediate size."
   ];
   if (headDimAssumed) {
@@ -167,6 +170,10 @@ export async function estimateVllm(
     runtimeSources: Object.values(defaults),
     notes,
     missing,
+    hardware: {
+      gpuVramGb: input.gpuVramGb,
+      numGpus: input.numGpus
+    },
     displayValues: {
       hiddenSize,
       attentionHeads,
@@ -196,7 +203,9 @@ export async function estimateLlamaCpp(
     context: input.context,
     parallel: input.parallel,
     cacheTypeK: input.cacheTypeK,
-    cacheTypeV: input.cacheTypeV
+    cacheTypeV: input.cacheTypeV,
+    gpuVramGb: input.gpuVramGb,
+    numGpus: input.numGpus
   });
 
   const layers = valueWithOverride(
@@ -366,6 +375,10 @@ export async function estimateLlamaCpp(
     runtimeSources: Object.values(defaults),
     notes,
     missing,
+    hardware: {
+      gpuVramGb: input.gpuVramGb,
+      numGpus: input.numGpus
+    },
     kvFormulaLabel: `kv_cache = layers x kv_group_width x context x parallel x (cache_bytes_k + cache_bytes_v) \n\t= ${layers?.value ?? "?"} x ${kvGroupWidth?.value ?? "?"} x ${context?.value ?? "?"} x ${parallel?.value ?? "?"} x (${cacheBytesK ?? "?"} + ${cacheBytesV ?? "?"})`,
     displayValues: {
       hiddenSize,

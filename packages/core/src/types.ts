@@ -53,6 +53,34 @@ export type FormulaBreakdown = {
   overhead: string;
 };
 
+export type HardwareInput = {
+  gpuVramGb?: number | undefined;
+  numGpus?: number | undefined;
+};
+
+export type HardwareEstimate = {
+  gpuVramPerGpu: MemoryAmount;
+  numGpus: number;
+  totalGpuVram: MemoryAmount;
+  inferred: boolean;
+  commonGpuVramGb?: number | undefined;
+  minimumRequiredGpuVram: MemoryAmount;
+  gpuMemoryBudget: MemoryAmount;
+  availableKvCache: MemoryAmount;
+  allocatedKvCache: MemoryAmount;
+  totalUsed: MemoryAmount;
+  unusedHeadroom: MemoryAmount;
+  kvBytesPerToken: number;
+  blockSize: number;
+  kvBlockBytes: number;
+  gpuKvCacheBlocks: number;
+  rawKvCacheTokenSlots: number;
+  blocksPerFullContext: number;
+  gpuKvCacheTokens: number;
+  maxFullContextConcurrency: number;
+  fitsFullContext: boolean;
+};
+
 export type EstimateResult = {
   mode: "vllm" | "llamacpp";
   ok: boolean;
@@ -65,6 +93,7 @@ export type EstimateResult = {
     overhead: MemoryAmount;
     total: MemoryAmount;
   } | null;
+  hardware: HardwareEstimate | null;
   formula: FormulaBreakdown | null;
   modelSources: string[];
   runtimeSources: RuntimeDefault[];
@@ -84,6 +113,8 @@ export type VllmEstimateInput = {
   batch?: number | undefined;
   kvDtype?: string | undefined;
   runtimeVersion?: string | undefined;
+  gpuVramGb?: number | undefined;
+  numGpus?: number | undefined;
   overrides?: Partial<{
     weightBytes: number;
     layers: number;
@@ -107,6 +138,8 @@ export type LlamaCppEstimateInput = {
   cacheTypeK?: string | undefined;
   cacheTypeV?: string | undefined;
   runtimeVersion?: string | undefined;
+  gpuVramGb?: number | undefined;
+  numGpus?: number | undefined;
   overrides?: Partial<{
     weightBytes: number;
     layers: number;
