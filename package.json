@@ -9,6 +9,9 @@
     ],
     "scripts": {
         "build": "npm run build --workspaces",
+        "build:cloudflare": "npm run build -w @vram-estimator/web",
+        "preview:cloudflare": "npm run build:cloudflare && wrangler pages dev apps/web/dist",
+        "deploy:cloudflare": "npm run build:cloudflare && wrangler pages deploy apps/web/dist --project-name=vram-estimator",
         "test": "vitest run",
         "typecheck": "tsc -b",
         "dev": "node scripts/dev.mjs",
@@ -21,6 +24,7 @@
         "@vitejs/plugin-react": "^4.3.4",
         "typescript": "^5.7.2",
         "vite": "^6.0.3",
-        "vitest": "^4.1.9"
+        "vitest": "^4.1.9",
+        "wrangler": "^4.107.0"
     }
 }

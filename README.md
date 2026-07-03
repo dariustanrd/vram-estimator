@@ -15,6 +15,39 @@ npm run dev:web
 npm run dev:api
 ```
 
+## Cloudflare Pages deployment
+
+The Vite frontend is built to `apps/web/dist`. Cloudflare Pages Functions route
+same-origin `/api/*` requests through the Hono API in `apps/api`.
+
+1. Install dependencies:
+
+   ```bash
+   npm ci
+   ```
+
+2. Optional: set an `HF_TOKEN` secret for server-side Hugging Face access:
+
+   ```bash
+   npx wrangler pages secret put HF_TOKEN --project-name=vram-estimator
+   ```
+
+3. Preview locally:
+
+   ```bash
+   npm run preview:cloudflare
+   ```
+
+4. Deploy:
+
+   ```bash
+   npm run deploy:cloudflare
+   ```
+
+Cloudflare dashboard settings should use the repository root, `npm ci` as the
+install command, `npm run build:cloudflare` as the build command, and
+`apps/web/dist` as the build output directory.
+
 ## CLI
 
 Runtime knobs use each backend's own CLI flag names, and model overrides use that
