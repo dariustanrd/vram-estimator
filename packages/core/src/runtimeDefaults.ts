@@ -1,13 +1,12 @@
-import llamaCppB9860 from "../../../runtime-defaults/llama-cpp/b9860.json" with { type: "json" };
-import vllmV0240 from "../../../runtime-defaults/vllm/v0.24.0.json" with { type: "json" };
+import { llamaCppB9860, vllmV0240 } from "./generated/runtimeDefaults.generated.js";
 import type { RuntimeSnapshot } from "./types.js";
 
 const VLLM: Record<string, RuntimeSnapshot> = {
-  "v0.24.0": vllmV0240 as RuntimeSnapshot
+  "v0.24.0": vllmV0240
 };
 
 const LLAMA_CPP: Record<string, RuntimeSnapshot> = {
-  b9860: llamaCppB9860 as RuntimeSnapshot
+  b9860: llamaCppB9860
 };
 
 export function listRuntimeDefaults(): { vllm: RuntimeSnapshot[]; llamacpp: RuntimeSnapshot[] } {

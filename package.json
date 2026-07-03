@@ -8,8 +8,9 @@
         "apps/*"
     ],
     "scripts": {
-        "build": "npm run build --workspaces",
-        "build:cloudflare": "npm run build -w @vram-estimator/web",
+        "build": "npm run generate:runtime-defaults && npm run build --workspaces",
+        "generate:runtime-defaults": "node scripts/generate-runtime-defaults.mjs",
+        "build:cloudflare": "npm run generate:runtime-defaults && npm run build -w @vram-estimator/web",
         "preview:cloudflare": "npm run build:cloudflare && wrangler pages dev apps/web/dist",
         "deploy:cloudflare": "npm run build:cloudflare && wrangler pages deploy apps/web/dist --project-name=vram-estimator",
         "test": "vitest run",
