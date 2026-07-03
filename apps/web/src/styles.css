@@ -340,9 +340,45 @@ summary {
 }
 
 .scenario-card {
+  background: #ffffff;
   border: 1px solid #dce3e7;
   border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
   overflow: hidden;
+  padding: 0;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    border-width 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+  width: 100%;
+}
+
+.scenario-card:hover {
+  border-color: #22a6b3;
+  border-width: 1px;
+  box-shadow: 0 8px 22px rgba(31, 111, 120, 0.14);
+  transform: translateY(-1px);
+}
+
+.scenario-card.active {
+  border-color: #14b8a6;
+  border-width: 2px;
+  box-shadow:
+    0 0 0 3px rgba(20, 184, 166, 0.18),
+    0 12px 28px rgba(20, 184, 166, 0.16);
+}
+
+.scenario-card.active .scenario-head {
+  background: linear-gradient(90deg, #ecfdf5 0%, #ffffff 65%);
+}
+
+.scenario-card.active .scenario-count {
+  background: #ccfbf1;
+  color: #0f766e;
 }
 
 .scenario-head {

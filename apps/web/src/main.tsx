@@ -1,4 +1,4 @@
-import { StrictMode, useMemo, useState } from "react";
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { EstimateResult, GroundTruthValue, MemoryUnit } from "@vram-estimator/core";
 import { formatMemory, memory } from "@vram-estimator/core";
@@ -440,6 +440,13 @@ function ResultView({
   cacheTypeK: string;
   cacheTypeV: string;
 }) {
+  const configuredSeqs = numberValue(result.resolvedInputs.batch) ?? 1;
+  const [selectedSeqs, setSelectedSeqs] = useState(configuredSeqs);
+
+  useEffect(() => {
+    setSelectedSeqs(configuredSeqs);
+  }, [configuredSeqs, result]);
+
   return (
     <div className="stack">
       {!result.ok && (
@@ -454,7 +461,9 @@ function ResultView({
           </ul>
         </div>
       )}
-      {result.memory && <SizesPanel result={result} memoryUnit={memoryUnit} />}
+      {result.memory && (
+        <SizesPanel result={result} memoryUnit={memoryUnit} selectedSeqs={selectedSeqs} onSelectSeqs={setSelectedSeqs} />
+      )}
       {result.ok && (
         <CommandView
           result={result}
@@ -462,10 +471,11 @@ function ResultView({
           kvDtype={kvDtype}
           cacheTypeK={cacheTypeK}
           cacheTypeV={cacheTypeV}
+          selectedSeqs={selectedSeqs}
         />
       )}
       {result.notes.length > 0 && <AssumptionsView notes={result.notes} />}
-      {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} />}
+      {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} selectedSeqs={selectedSeqs} />}
       <details className="panel">
         <summary>Raw resolved inputs &amp; sources</summary>
         <div className="panel-body">
@@ -479,7 +489,17 @@ function ResultView({
 
 type FlagRow = { flag: string; value: string; origin: Origin };
 
-function SizesPanel({ result, memoryUnit }: { result: EstimateResult; memoryUnit: MemoryUnit }) {
+function SizesPanel({
+  result,
+  memoryUnit,
+  selectedSeqs,
+  onSelectSeqs
+}: {
+  result: EstimateResult;
+  memoryUnit: MemoryUnit;
+  selectedSeqs: number;
+  onSelectSeqs: (seqs: number) => void;
+}) {
   const mem = result.memory!;
   const util = numberValue(result.resolvedInputs.utilization) ?? 1;
   const configuredSeqs = numberValue(result.resolvedInputs.batch) ?? 1;
@@ -529,7 +549,13 @@ function SizesPanel({ result, memoryUnit }: { result: EstimateResult; memoryUnit
         {scenarios.map((scenario) => {
           const s = scenarioAt(scenario.seqs);
           return (
-            <div className="scenario-card" key={scenario.title}>
+            <button
+              type="button"
+              className={`scenario-card${selectedSeqs === scenario.seqs ? " active" : ""}`}
+              key={scenario.title}
+              onClick={() => onSelectSeqs(scenario.seqs)}
+              aria-pressed={selectedSeqs === scenario.seqs}
+            >
               <div className="scenario-head">
                 <span className="scenario-count">
                   {scenario.seqs}
@@ -551,7 +577,7 @@ function SizesPanel({ result, memoryUnit }: { result: EstimateResult; memoryUnit
                   <em>incl. {formatMemory(s.overhead, memoryUnit)} overhead</em>
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -564,13 +590,15 @@ function CommandView({
   target,
   kvDtype,
   cacheTypeK,
-  cacheTypeV
+  cacheTypeV,
+  selectedSeqs
 }: {
   result: EstimateResult;
   target: string;
   kvDtype: string;
   cacheTypeK: string;
   cacheTypeV: string;
+  selectedSeqs: number;
 }) {
   const [copied, setCopied] = useState(false);
   const ri = result.resolvedInputs;
@@ -587,14 +615,14 @@ function CommandView({
     result.mode === "vllm"
       ? [
           { flag: "--max-model-len", value: valueStr(ri.context), origin: originOf(ri.context) },
-          { flag: "--max-num-seqs", value: valueStr(ri.batch), origin: originOf(ri.batch) },
+          { flag: "--max-num-seqs", value: String(selectedSeqs), origin: selectedSeqs === numberValue(ri.batch) ? originOf(ri.batch) : "you" },
           { flag: "--kv-cache-dtype", value: kvDtype, origin: kvDtype === "auto" ? "default" : "you" },
           { flag: "--gpu-memory-utilization", value: valueStr(ri.utilization), origin: originOf(ri.utilization) },
           { flag: "--tensor-parallel-size", value: "1", origin: "default" }
         ]
       : [
           { flag: "--ctx-size", value: valueStr(ri.context), origin: originOf(ri.context) },
-          { flag: "--parallel", value: valueStr(ri.batch), origin: originOf(ri.batch) },
+          { flag: "--parallel", value: String(selectedSeqs), origin: selectedSeqs === numberValue(ri.batch) ? originOf(ri.batch) : "you" },
           { flag: "--cache-type-k", value: cacheTypeK, origin: cacheTypeK === "f16" ? "default" : "you" },
           { flag: "--cache-type-v", value: cacheTypeV, origin: cacheTypeV === "f16" ? "default" : "you" },
           { flag: "--n-gpu-layers", value: "999", origin: "default" }
@@ -621,7 +649,7 @@ function CommandView({
         </button>
       </div>
       <div className="panel-body">
-        <p className="hint">These are the {bin} flags whose values drive the estimate above.</p>
+        <p className="hint">These are the {bin} flags for the selected {result.mode === "vllm" ? "sequence" : "slot"} concurrency.</p>
         <pre className="command">{formatCommand(bin, modelArg, flags)}</pre>
         <div className="flag-table">
           {flags.map((row) => (
@@ -652,17 +680,38 @@ function AssumptionsView({ notes }: { notes: string[] }) {
   );
 }
 
-function CalculationView({ result, memoryUnit }: { result: EstimateResult; memoryUnit: MemoryUnit }) {
+function CalculationView({ result, memoryUnit, selectedSeqs }: { result: EstimateResult; memoryUnit: MemoryUnit; selectedSeqs: number }) {
   const variables = VARIABLES[result.mode];
+  const mem = result.memory!;
+  const configuredSeqs = numberValue(result.resolvedInputs.batch) ?? 1;
+  const util = numberValue(result.resolvedInputs.utilization) ?? 1;
+  const weightsBytes = mem.weights.bytes;
+  const kvPerSeqBytes = configuredSeqs > 0 ? mem.kvCache.bytes / configuredSeqs : mem.kvCache.bytes;
+  const kvBytes = kvPerSeqBytes * selectedSeqs;
+  const totalBytes = (weightsBytes + kvBytes) / util;
+  const overheadBytes = totalBytes - weightsBytes - kvBytes;
+  const selectedMemory = {
+    weights: memory(weightsBytes),
+    kvCache: memory(kvBytes),
+    total: memory(totalBytes),
+    overhead: memory(overheadBytes)
+  };
+  const batchLabel = result.mode === "vllm" ? "batch" : "parallel";
+  const kvFormula = result.mode === "vllm"
+    ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
+    : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
+  const totalFormula = `total = (weights + kv_cache) / utilization \n\t= (${weightsBytes} + ${kvBytes}) / ${util} \n\t= ${totalBytes}`;
+  const overheadFormula = `overhead (modeled residual, not measured activation/workspace memory) = total - weights - kv_cache \n\t= ${totalBytes} - ${weightsBytes} - ${kvBytes} \n\t= ${overheadBytes}`;
+  const selectedBatch = { ...result.resolvedInputs.batch, value: selectedSeqs } as GroundTruthValue<unknown>;
   return (
     <div className="panel">
       <h2>How this was calculated</h2>
       <div className="panel-body">
         <div className="formula-list">
-          <FormulaLine label="Weights" formula={result.formula!.weights} value={result.memory ? formatMemory(result.memory.weights, memoryUnit) : undefined} />
-          <FormulaLine label="KV cache" formula={result.formula!.kvCache} value={result.memory ? formatMemory(result.memory.kvCache, memoryUnit) : undefined} />
-          <FormulaLine label="Total" formula={result.formula!.total} value={result.memory ? formatMemory(result.memory.total, memoryUnit) : undefined} />
-          <FormulaLine label="Overhead" formula={result.formula!.overhead} value={result.memory ? formatMemory(result.memory.overhead, memoryUnit) : undefined} />
+          <FormulaLine label="Weights" formula={result.formula!.weights} value={formatMemory(selectedMemory.weights, memoryUnit)} />
+          <FormulaLine label="KV cache" formula={kvFormula} value={formatMemory(selectedMemory.kvCache, memoryUnit)} />
+          <FormulaLine label="Total" formula={totalFormula} value={formatMemory(selectedMemory.total, memoryUnit)} />
+          <FormulaLine label="Overhead" formula={overheadFormula} value={formatMemory(selectedMemory.overhead, memoryUnit)} />
         </div>
         <div className="var-table">
           <div className="var-head">
@@ -670,7 +719,7 @@ function CalculationView({ result, memoryUnit }: { result: EstimateResult; memor
             <span>Value</span>
           </div>
           {variables.map((variable) => (
-            <VariableRow key={variable.key} label={variable.label} role={variable.role} value={result.resolvedInputs[variable.key]} />
+            <VariableRow key={variable.key} label={variable.label} role={variable.role} value={variable.key === "batch" ? selectedBatch : result.resolvedInputs[variable.key]} />
           ))}
         </div>
       </div>
