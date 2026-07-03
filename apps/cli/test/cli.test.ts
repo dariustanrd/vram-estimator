@@ -32,6 +32,7 @@ describe("CLI snapshots", () => {
           "kvHeads:1:metadata",
           "headDim:2:metadata",
           "gqa:0.5:metadata",
+          "weightDtype:float16:metadata",
         ],
         "totalBytes": 9991.304347826086,
       }

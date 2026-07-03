@@ -1,6 +1,6 @@
 import { calculateEstimate, gt } from "./calculator.js";
 import { bytesForDtype } from "./dtypes.js";
-import { fetchGgufMetadata, ggufNumber, ggufString, cacheTypeBytes } from "./gguf.js";
+import { fetchGgufMetadata, ggufNumber, ggufString, cacheTypeBytes, ggufFileTypeName } from "./gguf.js";
 import {
   fetchHfModelMetadata,
   kvBytesFromDtype,
@@ -172,7 +172,12 @@ export async function estimateVllm(
       attentionHeads,
       kvHeads: kvHeadsResolved,
       headDim,
-      gqa
+      gqa,
+      weightDtype: gt(
+        modelDtype,
+        input.overrides?.modelDtype !== undefined ? "override.modelDtype" : "config.torch_dtype",
+        input.overrides?.modelDtype !== undefined ? "user" : "metadata"
+      )
     }
   });
 }
@@ -368,7 +373,8 @@ export async function estimateLlamaCpp(
       kvHeads: kvHeadsResolved,
       headDimK,
       headDimV,
-      gqa
+      gqa,
+      weightDtype: gt(arch ? ggufFileTypeName(metadata) : undefined, "general.file_type", "metadata")
     }
   });
 }

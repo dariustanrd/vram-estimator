@@ -45,9 +45,9 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
     const input: VllmEstimateInput = {
       model: target,
       hfToken,
-      context: numberFlag(parsed, "context"),
-      batch: numberFlag(parsed, "batch"),
-      kvDtype: stringFlag(parsed, "kv-dtype"),
+      context: numberFlag(parsed, "max-model-len", "context"),
+      batch: numberFlag(parsed, "max-num-seqs", "batch"),
+      kvDtype: stringFlag(parsed, "kv-cache-dtype", "kv-dtype"),
       runtimeVersion: stringFlag(parsed, "runtime-version"),
       overrides: parseOverrides(parsed)
     };
@@ -59,7 +59,7 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
     const input: LlamaCppEstimateInput = {
       source: target,
       hfToken,
-      context: numberFlag(parsed, "context"),
+      context: numberFlag(parsed, "ctx-size", "context"),
       parallel: numberFlag(parsed, "parallel"),
       cacheTypeK: stringFlag(parsed, "cache-type-k"),
       cacheTypeV: stringFlag(parsed, "cache-type-v"),
@@ -100,41 +100,69 @@ function parse(argv: string[]): Parsed {
   return { command, positional, flags };
 }
 
+// Override flags follow each runtime's own naming convention: vLLM/Hugging Face config.json field
+// names and llama.cpp GGUF metadata key names. Legacy short flags remain as aliases so existing
+// scripts keep working. Multiple flags may map to the same internal field; a user only passes one.
+const OVERRIDE_FLAGS: Record<string, string> = {
+  "weight-bytes": "weightBytes",
+  gqa: "gqa",
+  // layers
+  "num-hidden-layers": "layers",
+  "block-count": "layers",
+  layers: "layers",
+  // hidden size
+  "hidden-size": "hiddenSize",
+  "embedding-length": "hiddenSize",
+  // attention heads
+  "num-attention-heads": "attentionHeads",
+  "attention-head-count": "attentionHeads",
+  "attention-heads": "attentionHeads",
+  // key/value heads
+  "num-key-value-heads": "kvHeads",
+  "attention-head-count-kv": "kvHeads",
+  "kv-heads": "kvHeads",
+  // head dimension
+  "head-dim": "headDim",
+  "attention-key-length": "headDim",
+  // model dtype (vLLM)
+  "torch-dtype": "modelDtype",
+  "model-dtype": "modelDtype",
+  // kv cache element bytes (vLLM)
+  "kv-bytes": "kvBytes",
+  // cache element bytes (llama.cpp)
+  "cache-bytes-k": "cacheBytesK",
+  "cache-bytes-v": "cacheBytesV"
+};
+
 function parseOverrides(parsed: Parsed): Record<string, number | string> {
-  const mapping: Record<string, string> = {
-    "weight-bytes": "weightBytes",
-    layers: "layers",
-    "hidden-size": "hiddenSize",
-    "kv-bytes": "kvBytes",
-    gqa: "gqa",
-    "model-dtype": "modelDtype",
-    "attention-heads": "attentionHeads",
-    "kv-heads": "kvHeads",
-    "cache-bytes-k": "cacheBytesK",
-    "cache-bytes-v": "cacheBytesV"
-  };
   const overrides: Record<string, number | string> = {};
-  for (const [flag, field] of Object.entries(mapping)) {
+  for (const [flag, field] of Object.entries(OVERRIDE_FLAGS)) {
     const value = parsed.flags[flag];
     if (typeof value === "string") {
       const numeric = Number(value);
-      overrides[field] = Number.isFinite(numeric) && flag !== "model-dtype" ? numeric : value;
+      overrides[field] = Number.isFinite(numeric) && field !== "modelDtype" ? numeric : value;
     }
   }
   return overrides;
 }
 
-function stringFlag(parsed: Parsed, name: string): string | undefined {
-  const value = parsed.flags[name];
-  return typeof value === "string" ? value : undefined;
+function stringFlag(parsed: Parsed, ...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = parsed.flags[name];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
 }
 
-function numberFlag(parsed: Parsed, name: string): number | undefined {
-  const value = stringFlag(parsed, name);
-  if (value === undefined) return undefined;
-  const parsedValue = Number(value);
-  if (!Number.isFinite(parsedValue)) throw new Error(`--${name} must be a number`);
-  return parsedValue;
+function numberFlag(parsed: Parsed, ...names: string[]): number | undefined {
+  for (const name of names) {
+    const value = stringFlag(parsed, name);
+    if (value === undefined) continue;
+    const parsedValue = Number(value);
+    if (!Number.isFinite(parsedValue)) throw new Error(`--${name} must be a number`);
+    return parsedValue;
+  }
+  return undefined;
 }
 
 function printJson(value: unknown, write: (text: string) => void): void {
@@ -145,13 +173,17 @@ function printHelp(write: (text: string) => void): void {
   write(`vram-estimator
 
 Commands:
-  vllm <hf-model-id-or-config-url> [--hf-token TOKEN] [--context N] [--batch N] [--kv-dtype DTYPE] [--runtime-version VERSION]
-  llamacpp <gguf-url-or-repo::file> [--hf-token TOKEN] [--context N] [--parallel N] [--cache-type-k TYPE] [--cache-type-v TYPE] [--runtime-version VERSION]
+  vllm <hf-model-id-or-config-url> [--max-model-len N] [--max-num-seqs N] [--kv-cache-dtype DTYPE] [--hf-token TOKEN] [--runtime-version VERSION]
+  llamacpp <gguf-url-or-repo::file> [--ctx-size N] [--parallel N] [--cache-type-k TYPE] [--cache-type-v TYPE] [--hf-token TOKEN] [--runtime-version VERSION]
   runtime-defaults
 
-Explicit override flags:
-  --weight-bytes N --layers N --hidden-size N --gqa N --attention-heads N --kv-heads N
-  --kv-bytes N --model-dtype DTYPE --cache-bytes-k N --cache-bytes-v N
+vLLM model overrides (Hugging Face config.json fields):
+  --num-hidden-layers N --hidden-size N --num-attention-heads N --num-key-value-heads N
+  --head-dim N --torch-dtype DTYPE --kv-bytes N --gqa N --weight-bytes N
+
+llama.cpp model overrides (GGUF metadata keys):
+  --block-count N --embedding-length N --attention-head-count N --attention-head-count-kv N
+  --attention-key-length N --cache-bytes-k N --cache-bytes-v N --gqa N --weight-bytes N
 `);
 }
 
