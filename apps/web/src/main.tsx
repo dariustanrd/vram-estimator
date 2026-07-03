@@ -639,7 +639,40 @@ function SizesPanel({
         </div>
       </div>
       <div className="sizes-scenarios">
-        <span className="group-label">Per concurrency</span>
+        <span className="group-label">VRAM required per concurrency</span>
+        {hardware && result.mode === "vllm" && (
+          <button
+            type="button"
+            className={`scenario-card${selection.kind === "hardware" ? " active" : ""}${hardware.fitsFullContext ? "" : " warning"}`}
+            onClick={() => onSelect({ kind: "hardware" })}
+            aria-pressed={selection.kind === "hardware"}
+          >
+            <div className="scenario-head">
+              <span className="scenario-count">
+                {formatConcurrency(hardware.maxFullContextConcurrency)}
+                <small>× {unitWord}</small>
+              </span>
+              <div className="scenario-title">
+                <strong>Hardware capacity</strong>
+                <span>
+                  {hardware.inferred ? "inferred" : "your"} {formatMemory(hardware.gpuVramPerGpu, memoryUnit)} × {hardware.numGpus} GPU · no --max-num-seqs
+                </span>
+              </div>
+            </div>
+            <div className="scenario-stats">
+              <div className="scenario-stat">
+                <span>KV cache</span>
+                <strong>{formatMemory(hardware.allocatedKvCache, memoryUnit)}</strong>
+                <em>{formatInteger(hardware.gpuKvCacheTokens)} vLLM tokens / {formatInteger(hardware.gpuKvCacheBlocks)} blocks</em>
+              </div>
+              <div className="scenario-stat total">
+                <span>Total used</span>
+                <strong>{formatMemory(hardware.totalUsed, memoryUnit)}</strong>
+                <em>{formatMemory(hardware.unusedHeadroom, memoryUnit)} reserved/free</em>
+              </div>
+            </div>
+          </button>
+        )}
         {scenarios.map((scenario) => {
           const s = scenarioAt(scenario.seqs);
           return (
@@ -674,39 +707,6 @@ function SizesPanel({
             </button>
           );
         })}
-        {hardware && result.mode === "vllm" && (
-          <button
-            type="button"
-            className={`scenario-card${selection.kind === "hardware" ? " active" : ""}${hardware.fitsFullContext ? "" : " warning"}`}
-            onClick={() => onSelect({ kind: "hardware" })}
-            aria-pressed={selection.kind === "hardware"}
-          >
-            <div className="scenario-head">
-              <span className="scenario-count">
-                {formatConcurrency(hardware.maxFullContextConcurrency)}
-                <small>× {unitWord}</small>
-              </span>
-              <div className="scenario-title">
-                <strong>Hardware capacity</strong>
-                <span>
-                  {hardware.inferred ? "inferred" : "your"} {formatMemory(hardware.gpuVramPerGpu, memoryUnit)} × {hardware.numGpus} GPU · no --max-num-seqs
-                </span>
-              </div>
-            </div>
-            <div className="scenario-stats">
-              <div className="scenario-stat">
-                <span>KV cache</span>
-                <strong>{formatMemory(hardware.allocatedKvCache, memoryUnit)}</strong>
-                <em>{formatInteger(hardware.gpuKvCacheTokens)} vLLM tokens / {formatInteger(hardware.gpuKvCacheBlocks)} blocks</em>
-              </div>
-              <div className="scenario-stat total">
-                <span>Total used</span>
-                <strong>{formatMemory(hardware.totalUsed, memoryUnit)}</strong>
-                <em>{formatMemory(hardware.unusedHeadroom, memoryUnit)} reserved/free</em>
-              </div>
-            </div>
-          </button>
-        )}
       </div>
     </div>
   );

@@ -93,7 +93,7 @@ h2 {
 .workspace {
   display: grid;
   gap: 20px;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(380px, 520px) minmax(0, 1fr);
   padding: 20px;
 }
 
@@ -192,6 +192,7 @@ code.flag {
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1.4;
+  margin-left: auto;
   padding: 1px 7px;
   text-transform: uppercase;
   white-space: nowrap;
