@@ -1,0 +1,17 @@
+{
+  "name": "@vram-estimator/api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx --conditions=development src/dev.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.8",
+    "@vram-estimator/core": "0.1.0",
+    "hono": "^4.6.14",
+    "tsx": "^4.19.2"
+  }
+}

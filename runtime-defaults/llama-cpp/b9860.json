@@ -1,0 +1,57 @@
+{
+  "runtime": "llama.cpp",
+  "version": "b9860",
+  "repo": "ggml-org/llama.cpp",
+  "defaults": {
+    "gpu_layers": {
+      "value": 999,
+      "source": {
+        "repo": "ggml-org/llama.cpp",
+        "version": "b9860",
+        "file": "common/arg.cpp",
+        "symbol": "--gpu-layers override selected by vram-estimator v1",
+        "url": "https://github.com/ggml-org/llama.cpp/blob/b9860/common/arg.cpp"
+      }
+    },
+    "parallel": {
+      "value": 1,
+      "source": {
+        "repo": "ggml-org/llama.cpp",
+        "version": "b9860",
+        "file": "tools/server/README.md",
+        "symbol": "--parallel",
+        "url": "https://github.com/ggml-org/llama.cpp/blob/b9860/tools/server/README.md"
+      }
+    },
+    "cache_type_k": {
+      "value": "f16",
+      "source": {
+        "repo": "ggml-org/llama.cpp",
+        "version": "b9860",
+        "file": "common/arg.cpp",
+        "symbol": "--cache-type-k",
+        "url": "https://github.com/ggml-org/llama.cpp/blob/b9860/common/arg.cpp"
+      }
+    },
+    "cache_type_v": {
+      "value": "f16",
+      "source": {
+        "repo": "ggml-org/llama.cpp",
+        "version": "b9860",
+        "file": "common/arg.cpp",
+        "symbol": "--cache-type-v",
+        "url": "https://github.com/ggml-org/llama.cpp/blob/b9860/common/arg.cpp"
+      }
+    },
+    "runtime_utilization": {
+      "value": 1,
+      "source": {
+        "repo": "ggml-org/llama.cpp",
+        "version": "b9860",
+        "file": "common/common.h",
+        "symbol": "No vLLM-style GPU memory utilization reservation",
+        "url": "https://github.com/ggml-org/llama.cpp/blob/b9860/common/common.h"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@vram-estimator/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "vram-estimator": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "tsx --conditions=development src/index.ts"
+  },
+  "dependencies": {
+    "@vram-estimator/core": "0.1.0",
+    "tsx": "^4.19.2"
+  }
+}
