@@ -57,7 +57,8 @@ export async function estimateVllm(
     input.batch ?? input.overrides?.batch,
     defaults.max_num_seqs?.value as number | undefined,
     input.batch !== undefined || input.overrides?.batch !== undefined ? "user.batch" : "runtime.max_num_seqs",
-    "runtime.max_num_seqs"
+    "runtime.max_num_seqs",
+    "runtime-default"
   );
   const attentionHeads = valueWithOverride(
     input.overrides?.attentionHeads,
@@ -230,7 +231,8 @@ export async function estimateLlamaCpp(
     input.parallel ?? input.overrides?.parallel,
     defaults.parallel?.value as number | undefined,
     input.parallel !== undefined || input.overrides?.parallel !== undefined ? "user.parallel" : "runtime.parallel",
-    "runtime.parallel"
+    "runtime.parallel",
+    "runtime-default"
   );
   const attentionHeads = valueWithOverride(
     input.overrides?.attentionHeads,
@@ -394,12 +396,13 @@ export async function estimateLlamaCpp(
 
 function valueWithOverride(
   override: number | string | undefined,
-  metadata: number | string | undefined,
+  fallback: number | string | undefined,
   overrideSource: string,
-  metadataSource: string
+  fallbackSource: string,
+  fallbackProvidedBy: GroundTruthValue<number>["providedBy"] = "metadata"
 ): GroundTruthValue<number> | undefined {
   if (typeof override === "number" && Number.isFinite(override)) return gt(override, overrideSource, "user");
-  if (typeof metadata === "number" && Number.isFinite(metadata)) return gt(metadata, metadataSource, "metadata");
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return gt(fallback, fallbackSource, fallbackProvidedBy);
   return undefined;
 }
 

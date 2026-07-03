@@ -74,7 +74,6 @@ export type HardwareEstimate = {
   blockSize: number;
   kvBlockBytes: number;
   gpuKvCacheBlocks: number;
-  rawKvCacheTokenSlots: number;
   blocksPerFullContext: number;
   gpuKvCacheTokens: number;
   maxFullContextConcurrency: number;

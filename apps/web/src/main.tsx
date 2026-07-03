@@ -802,7 +802,12 @@ function CalculationView({ result, memoryUnit, selection }: { result: EstimateRe
     : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
   const totalFormula = `total = (weights + kv_cache) / utilization \n\t= (${weightsBytes} + ${kvBytes}) / ${util} \n\t= ${totalBytes}`;
   const overheadFormula = `overhead (modeled residual, not measured activation/workspace memory) = total - weights - kv_cache \n\t= ${totalBytes} - ${weightsBytes} - ${kvBytes} \n\t= ${overheadBytes}`;
-  const selectedBatch = { ...result.resolvedInputs.batch, value: selectedSeqs } as GroundTruthValue<unknown>;
+  const selectedBatch = {
+    ...result.resolvedInputs.batch,
+    value: selectedSeqs,
+    providedBy: selectedSeqs === configuredSeqs ? result.resolvedInputs.batch?.providedBy : "user",
+    source: selectedSeqs === configuredSeqs ? result.resolvedInputs.batch?.source : "selected concurrency"
+  } as GroundTruthValue<unknown>;
   return (
     <div className="panel">
       <h2>How this was calculated</h2>
@@ -837,8 +842,6 @@ function HardwareCalculationView({ result, memoryUnit }: { result: EstimateResul
   const kvBytes = numberValue(ri.kvBytes) ?? 0;
   const context = numberValue(ri.context) ?? 0;
   const perTokenPerLayerBytes = 2 * kvGroupWidth * kvBytes;
-  const logicalFullContextKvBytes = hardware.kvBytesPerToken * context;
-  const blockRoundedFullContextKvBytes = hardware.blocksPerFullContext * hardware.kvBlockBytes;
   const requestedBytes = hardware.gpuMemoryBudget.bytes;
   const nonKvBytes = weightsBytes;
 
@@ -869,12 +872,12 @@ function HardwareCalculationView({ result, memoryUnit }: { result: EstimateResul
           />
           <FormulaLine
             label="KV blocks"
-            formula={`kv_block_bytes = bytes_per_token_all_layers x block_size \n\t= ${hardware.kvBytesPerToken} x ${hardware.blockSize} \n\t= ${hardware.kvBlockBytes}\ngpu_blocks = floor(available_kv_cache_memory / kv_block_bytes) \n\t= floor(${hardware.availableKvCache.bytes} / ${hardware.kvBlockBytes}) \n\t= ${hardware.gpuKvCacheBlocks}\nraw_token_slots = gpu_blocks x block_size \n\t= ${hardware.gpuKvCacheBlocks} x ${hardware.blockSize} \n\t= ${hardware.rawKvCacheTokenSlots}`}
+            formula={`kv_block_bytes = bytes_per_token_all_layers x block_size \n\t= ${hardware.kvBytesPerToken} x ${hardware.blockSize} \n\t= ${hardware.kvBlockBytes}\ngpu_blocks = floor(available_kv_cache_memory / kv_block_bytes) \n\t= floor(${hardware.availableKvCache.bytes} / ${hardware.kvBlockBytes}) \n\t= ${hardware.gpuKvCacheBlocks}`}
             value={`${formatInteger(hardware.gpuKvCacheBlocks)} blocks`}
           />
           <FormulaLine
             label="Full-context concurrency"
-            formula={`logical_full_context_kv = bytes_per_token_all_layers x max_model_len \n\t= ${hardware.kvBytesPerToken} x ${context} \n\t= ${logicalFullContextKvBytes}\nblocks_per_full_context = ceil(max_model_len / block_size) \n\t= ceil(${context} / ${hardware.blockSize}) \n\t= ${hardware.blocksPerFullContext}\nblock_rounded_full_context_kv = blocks_per_full_context x kv_block_bytes \n\t= ${hardware.blocksPerFullContext} x ${hardware.kvBlockBytes} \n\t= ${blockRoundedFullContextKvBytes}\nmax_concurrency = gpu_blocks / blocks_per_full_context \n\t= ${hardware.gpuKvCacheBlocks} / ${hardware.blocksPerFullContext} \n\t= ${hardware.maxFullContextConcurrency} = ${formatConcurrency(hardware.maxFullContextConcurrency)}x\ngpu_kv_cache_tokens_logged = int(max_concurrency x max_model_len) \n\t= int(${hardware.maxFullContextConcurrency} x ${context}) \n\t= ${hardware.gpuKvCacheTokens}`}
+            formula={`blocks_per_full_context = ceil(max_model_len / block_size) \n\t= ceil(${context} / ${hardware.blockSize}) \n\t= ${hardware.blocksPerFullContext}\nmax_concurrency = gpu_blocks / blocks_per_full_context \n\t= ${hardware.gpuKvCacheBlocks} / ${hardware.blocksPerFullContext} \n\t= ${hardware.maxFullContextConcurrency} = ${formatConcurrency(hardware.maxFullContextConcurrency)}x\ngpu_kv_cache_tokens = int(max_concurrency x max_model_len) \n\t= int(${hardware.maxFullContextConcurrency} x ${context}) \n\t= ${hardware.gpuKvCacheTokens}`}
             value={`${formatInteger(hardware.gpuKvCacheTokens)} tokens`}
           />
           <FormulaLine

@@ -67,7 +67,6 @@ describe("calculator", () => {
     expect(result.hardware?.availableKvCache.bytes).toBe(5_600_000_000);
     expect(result.hardware?.gpuKvCacheBlocks).toBe(2670);
     expect(result.hardware?.blocksPerFullContext).toBe(512);
-    expect(result.hardware?.rawKvCacheTokenSlots).toBe(42_720);
     expect(result.hardware?.gpuKvCacheTokens).toBe(42_720);
   });
 
@@ -88,7 +87,6 @@ describe("calculator", () => {
     });
     expect(result.ok).toBe(true);
     expect(result.hardware?.gpuKvCacheBlocks).toBe(10);
-    expect(result.hardware?.rawKvCacheTokenSlots).toBe(160);
     expect(result.hardware?.blocksPerFullContext).toBe(2);
     expect(result.hardware?.maxFullContextConcurrency).toBe(5);
     expect(result.hardware?.gpuKvCacheTokens).toBe(85);

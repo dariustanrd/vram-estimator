@@ -152,7 +152,6 @@ function calculateHardwareEstimate(input: HardwareCalcInput): HardwareEstimate {
   const gpuMemoryBudgetBytes = totalGpuVramBytes * input.utilization;
   const availableKvCacheBytes = Math.max(0, gpuMemoryBudgetBytes - input.weightBytes);
   const gpuKvCacheBlocks = kvBlockBytes > 0 ? Math.floor(availableKvCacheBytes / kvBlockBytes) : 0;
-  const rawKvCacheTokenSlots = gpuKvCacheBlocks * blockSize;
   const maxFullContextConcurrency = blocksPerFullContext > 0 ? gpuKvCacheBlocks / blocksPerFullContext : 0;
   const gpuKvCacheTokens = input.context > 0 ? Math.floor(maxFullContextConcurrency * input.context) : 0;
   const allocatedKvCacheBytes = gpuKvCacheBlocks * kvBlockBytes;
@@ -175,7 +174,6 @@ function calculateHardwareEstimate(input: HardwareCalcInput): HardwareEstimate {
     blockSize,
     kvBlockBytes,
     gpuKvCacheBlocks,
-    rawKvCacheTokenSlots,
     blocksPerFullContext,
     gpuKvCacheTokens,
     maxFullContextConcurrency,
