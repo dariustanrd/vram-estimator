@@ -215,6 +215,80 @@ select:focus {
   outline: 2px solid rgba(31, 111, 120, 0.16);
 }
 
+.model-search {
+  color: #3c4a52;
+  display: grid;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 7px;
+}
+
+.model-combobox {
+  position: relative;
+}
+
+.model-suggestions {
+  background: #ffffff;
+  border: 1px solid #cbd6dc;
+  border-radius: 8px;
+  box-shadow: 0 14px 32px rgba(23, 32, 38, 0.16);
+  display: grid;
+  left: 0;
+  margin-top: 6px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+}
+
+.model-suggestion,
+.model-suggestion-status {
+  border-radius: 6px;
+  color: #3c4a52;
+  font-size: 13px;
+  padding: 9px 10px;
+}
+
+.model-suggestion {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  width: 100%;
+}
+
+.model-suggestion:hover,
+.model-suggestion.active {
+  background: #eef7f8;
+}
+
+.model-suggestion-id {
+  color: #172026;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-suggestion-meta {
+  color: #64727b;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 8px;
+}
+
+.model-suggestion-status {
+  color: #64727b;
+  font-weight: 500;
+}
+
 .grid2 {
   display: grid;
   gap: 12px;

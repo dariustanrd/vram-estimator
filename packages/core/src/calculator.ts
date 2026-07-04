@@ -22,6 +22,7 @@ export type CoreCalcInput = {
   utilization?: GroundTruthValue<number> | undefined;
   userOverrides: Record<string, unknown>;
   modelSources: string[];
+  modelSourceDetails?: Record<string, unknown> | undefined;
   runtimeSources: RuntimeDefault[];
   notes?: string[] | undefined;
   missing?: MissingValue[] | undefined;
@@ -72,6 +73,7 @@ export function calculateEstimate(input: CoreCalcInput): EstimateResult {
       hardware: null,
       formula: null,
       modelSources: input.modelSources,
+      modelSourceDetails: input.modelSourceDetails,
       runtimeSources: input.runtimeSources,
       notes: input.notes ?? []
     };
@@ -113,6 +115,7 @@ export function calculateEstimate(input: CoreCalcInput): EstimateResult {
       overhead: `overhead (modeled residual, not measured activation/workspace memory) = total - weights - kv_cache \n\t= ${totalBytes} - ${weightBytes} - ${kvBytes} \n\t= ${overheadBytes}`
     },
     modelSources: input.modelSources,
+    modelSourceDetails: input.modelSourceDetails,
     runtimeSources: input.runtimeSources,
     notes: input.notes ?? []
   };

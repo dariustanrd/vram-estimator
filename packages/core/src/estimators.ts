@@ -171,6 +171,7 @@ export async function estimateVllm(
     utilization,
     userOverrides,
     modelSources: metadata.sources,
+    modelSourceDetails: metadata.sourceDetails,
     runtimeSources: Object.values(defaults),
     notes,
     missing,

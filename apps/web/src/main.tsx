@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { createRoot } from "react-dom/client";
 import type { EstimateResult, GroundTruthValue, MemoryUnit } from "@vram-estimator/core";
 import { formatMemory, memory } from "@vram-estimator/core";
@@ -7,6 +7,17 @@ import "./styles.css";
 type Mode = "vllm" | "llamacpp";
 type Origin = "you" | "default" | "model" | "hardware" | "assumed" | "missing";
 type ResultSelection = { kind: "concurrency"; seqs: number } | { kind: "hardware" };
+type HfModelSuggestion = {
+  id: string;
+  value?: string | undefined;
+  repoId?: string | undefined;
+  file?: string | undefined;
+  sizeBytes?: number | undefined;
+  downloads?: number | undefined;
+  likes?: number | undefined;
+  pipelineTag?: string | undefined;
+};
+type HfModelSearchResponse = { models?: HfModelSuggestion[] | undefined };
 
 /**
  * Per-tab we stick to ONE naming convention so the UI matches what the user reads and types
@@ -100,12 +111,61 @@ function App() {
   const [result, setResult] = useState<EstimateResult | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [modelSuggestions, setModelSuggestions] = useState<HfModelSuggestion[]>([]);
+  const [modelSuggestionsOpen, setModelSuggestionsOpen] = useState(false);
+  const [modelSuggestionsLoading, setModelSuggestionsLoading] = useState(false);
+  const [activeModelSuggestion, setActiveModelSuggestion] = useState(-1);
 
   const endpoint = mode === "vllm" ? "/api/estimate/vllm" : "/api/estimate/llamacpp";
   const placeholder =
     mode === "vllm"
-      ? "meta-llama/Llama-3.1-8B-Instruct"
-      : "https://huggingface.co/user/repo/resolve/main/model.gguf or repo::model.gguf";
+      ? "Search Hugging Face, e.g. Qwen 7B Instruct"
+      : "Search Hugging Face GGUFs, e.g. Qwen 7B Q4_K_M";
+
+  useEffect(() => {
+    const query = target.trim();
+    const shouldSearch =
+      query.length >= 2 &&
+      !/^https?:\/\//i.test(query) &&
+      !query.includes("::") &&
+      (mode === "llamacpp" || !query.includes("/"));
+    if (!shouldSearch) {
+      setModelSuggestions([]);
+      setModelSuggestionsOpen(false);
+      setModelSuggestionsLoading(false);
+      setActiveModelSuggestion(-1);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setModelSuggestionsLoading(true);
+      try {
+        const searchEndpoint = mode === "vllm" ? "/api/hf/models" : "/api/hf/gguf";
+        const requestInit: RequestInit = { signal: controller.signal };
+        if (hfToken) requestInit.headers = { authorization: `Bearer ${hfToken}` };
+        const response = await fetch(`${searchEndpoint}?q=${encodeURIComponent(query)}`, requestInit);
+        if (!response.ok) throw new Error(`Model search failed: ${response.status}`);
+        const data = (await response.json()) as HfModelSearchResponse;
+        const models = data.models ?? [];
+        setModelSuggestions(models);
+        setModelSuggestionsOpen(models.length > 0);
+        setActiveModelSuggestion(models.length > 0 ? 0 : -1);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setModelSuggestions([]);
+        setModelSuggestionsOpen(false);
+        setActiveModelSuggestion(-1);
+      } finally {
+        if (!controller.signal.aborted) setModelSuggestionsLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [hfToken, mode, target]);
 
   const parsedOverrides = useMemo(() => {
     const parsed: Record<string, number | string> = {};
@@ -210,6 +270,43 @@ function App() {
     setDefaulted(nextDefaulted);
   }
 
+  function chooseModelSuggestion(suggestionValue: string) {
+    setTarget(suggestionValue);
+    setModelSuggestionsOpen(false);
+    setActiveModelSuggestion(-1);
+  }
+
+  function handleModelKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (modelSuggestions.length === 0) return;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setModelSuggestionsOpen(true);
+      setActiveModelSuggestion((prev) => (prev + 1) % modelSuggestions.length);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setModelSuggestionsOpen(true);
+      setActiveModelSuggestion((prev) => (prev <= 0 ? modelSuggestions.length - 1 : prev - 1));
+      return;
+    }
+
+    if (event.key === "Enter" && modelSuggestionsOpen && activeModelSuggestion >= 0) {
+      const suggestion = modelSuggestions[activeModelSuggestion];
+      if (!suggestion) return;
+      event.preventDefault();
+      chooseModelSuggestion(suggestion.value ?? suggestion.id);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      setModelSuggestionsOpen(false);
+      setActiveModelSuggestion(-1);
+    }
+  }
+
   async function submit() {
     setLoading(true);
     setError("");
@@ -292,10 +389,73 @@ function App() {
           <section className="control-card">
             <div className="control-group">
               <span className="group-label">Model</span>
-            <label>
-              {mode === "vllm" ? "Hugging Face model" : "GGUF source"}
-              <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={placeholder} />
-            </label>
+            <div className="model-search">
+              <label htmlFor="model-target-input">{mode === "vllm" ? "Hugging Face model" : "GGUF source"}</label>
+              <div className="model-combobox">
+                <input
+                  id="model-target-input"
+                  value={target}
+                  onChange={(event) => {
+                    setTarget(event.target.value);
+                    setModelSuggestionsOpen(true);
+                  }}
+                  onFocus={() => {
+                    if (modelSuggestions.length > 0) setModelSuggestionsOpen(true);
+                  }}
+                  onBlur={() => window.setTimeout(() => setModelSuggestionsOpen(false), 120)}
+                  onKeyDown={handleModelKeyDown}
+                  placeholder={placeholder}
+                  autoComplete="off"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={modelSuggestionsOpen}
+                  aria-controls="hf-model-suggestions"
+                  aria-activedescendant={
+                    activeModelSuggestion >= 0 ? `hf-model-suggestion-${activeModelSuggestion}` : undefined
+                  }
+                />
+                {(modelSuggestionsOpen || modelSuggestionsLoading) && (
+                  <div className="model-suggestions" id="hf-model-suggestions" role="listbox">
+                    {modelSuggestionsLoading && (
+                      <div className="model-suggestion-status">
+                        Searching Hugging Face {mode === "vllm" ? "models" : "GGUF files"}…
+                      </div>
+                    )}
+                    {!modelSuggestionsLoading && modelSuggestions.length === 0 && target.trim().length >= 2 && (
+                      <div className="model-suggestion-status">
+                        {mode === "vllm"
+                          ? "No public models found. You can still paste a model id."
+                          : "No GGUF files found. You can still paste a URL or repo::file."}
+                      </div>
+                    )}
+                    {modelSuggestions.map((suggestion, index) => (
+                      <button
+                        type="button"
+                        id={`hf-model-suggestion-${index}`}
+                        role="option"
+                        aria-selected={index === activeModelSuggestion}
+                        className={`model-suggestion${index === activeModelSuggestion ? " active" : ""}`}
+                        key={suggestion.id}
+                        onMouseEnter={() => setActiveModelSuggestion(index)}
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          chooseModelSuggestion(suggestion.value ?? suggestion.id);
+                        }}
+                      >
+                        <span className="model-suggestion-id">{suggestion.file ?? suggestion.id}</span>
+                        <span className="model-suggestion-meta">
+                          {suggestion.repoId && <span>{suggestion.repoId}</span>}
+                          {suggestion.sizeBytes !== undefined && <span>{formatMemory(memory(suggestion.sizeBytes), memoryUnit)}</span>}
+                          {suggestion.pipelineTag && <span>{suggestion.pipelineTag}</span>}
+                          {suggestion.downloads !== undefined && <span>{formatCompactNumber(suggestion.downloads)} downloads</span>}
+                          {suggestion.likes !== undefined && <span>{formatCompactNumber(suggestion.likes)} likes</span>}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
             <label>
               HF token
               <input
@@ -573,7 +733,7 @@ function ResultView({
         <summary>Raw resolved inputs &amp; sources</summary>
         <div className="panel-body">
           <pre>{JSON.stringify(result.resolvedInputs, null, 2)}</pre>
-          <pre>{JSON.stringify({ model: result.modelSources, runtime: result.runtimeSources, hardware: result.hardware }, null, 2)}</pre>
+          <pre>{JSON.stringify({ model: result.modelSources, modelDetails: result.modelSourceDetails, runtime: result.runtimeSources, hardware: result.hardware }, null, 2)}</pre>
         </div>
       </details>
     </div>
@@ -1020,6 +1180,11 @@ function formatConcurrency(value: number): string {
 function formatInteger(value: number): string {
   if (!Number.isFinite(value)) return "0";
   return Math.floor(value).toLocaleString();
+}
+
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function defaultSelection(result: EstimateResult, configuredSeqs: number): ResultSelection {

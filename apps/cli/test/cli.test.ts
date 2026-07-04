@@ -6,6 +6,27 @@ describe("CLI snapshots", () => {
     const output = await invoke(["vllm", "org/tiny"], hfFetcher({ completeConfig: true }));
     const parsed = JSON.parse(output);
 
+    expect(parsed.modelSourceDetails).toMatchObject({
+      provider: "huggingface",
+      modelId: "org/tiny",
+      revision: "abc123",
+      parsedFiles: [
+        {
+          path: "config.json",
+          fields: {
+            num_hidden_layers: 1,
+            hidden_size: 4,
+            max_position_embeddings: 8,
+            num_attention_heads: 2,
+            num_key_value_heads: 1,
+            torch_dtype: "float16"
+          }
+        }
+      ],
+      weightBytes: 1000,
+      weightFiles: [{ path: "model.safetensors", size: 1000 }]
+    });
+
     expect(snapshot(parsed)).toMatchInlineSnapshot(`
       {
         "formula": {

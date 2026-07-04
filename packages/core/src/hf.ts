@@ -11,7 +11,22 @@ export type HfModelMetadata = {
   repoApiUrl?: string | undefined;
   weightBytes?: number | undefined;
   weightFiles: Array<{ path: string; size: number; source: string }>;
+  sourceDetails: HfModelSourceDetails;
   sources: string[];
+};
+
+export type HfModelSourceDetails = {
+  provider: "huggingface";
+  modelId?: string | undefined;
+  revision?: string | undefined;
+  repoApiUrl?: string | undefined;
+  parsedFiles: Array<{
+    path: string;
+    url: string;
+    fields: HfConfig;
+  }>;
+  weightBytes?: number | undefined;
+  weightFiles: Array<{ path: string; size: number; source: string }>;
 };
 
 type HfSibling = {
@@ -72,6 +87,12 @@ export async function fetchHfModelMetadata(
         config,
         configUrl: input,
         weightFiles: [],
+        sourceDetails: hfSourceDetails({
+          config,
+          configUrl: input,
+          configPath: parsed.path ?? "config.json",
+          weightFiles: []
+        }),
         sources: [input]
       };
     }
@@ -128,11 +149,48 @@ async function fetchHfModelMetadataFromRepo(
     repoApiUrl,
     weightBytes,
     weightFiles: exactWeightFiles,
+    sourceDetails: hfSourceDetails({
+      modelId,
+      revision: resolvedRevision,
+      repoApiUrl,
+      config,
+      configUrl,
+      configPath: parseHfConfigUrl(configUrl).path ?? "config.json",
+      weightBytes,
+      weightFiles: exactWeightFiles
+    }),
     sources: [
       repoApiUrl,
       configUrl,
       ...exactWeightFiles.map((file) => `${file.path}: ${file.source}`)
     ]
+  };
+}
+
+function hfSourceDetails(input: {
+  modelId?: string | undefined;
+  revision?: string | undefined;
+  repoApiUrl?: string | undefined;
+  config: HfConfig;
+  configUrl: string;
+  configPath: string;
+  weightBytes?: number | undefined;
+  weightFiles: Array<{ path: string; size: number; source: string }>;
+}): HfModelSourceDetails {
+  return {
+    provider: "huggingface",
+    modelId: input.modelId,
+    revision: input.revision,
+    repoApiUrl: input.repoApiUrl,
+    parsedFiles: [
+      {
+        path: input.configPath,
+        url: input.configUrl,
+        fields: input.config
+      }
+    ],
+    weightBytes: input.weightBytes,
+    weightFiles: input.weightFiles
   };
 }
 

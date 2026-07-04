@@ -95,6 +95,7 @@ export type EstimateResult = {
   hardware: HardwareEstimate | null;
   formula: FormulaBreakdown | null;
   modelSources: string[];
+  modelSourceDetails?: Record<string, unknown> | undefined;
   runtimeSources: RuntimeDefault[];
   notes: string[];
 };
