@@ -99,13 +99,14 @@ app.get("/api/hf/models", async (c) => {
 app.get("/api/hf/gguf", async (c) => {
   const query = c.req.query("q")?.trim();
   if (!query || query.length < 2) return c.json({ models: [] });
+  const isDirectRepoQuery = query.includes("/") && !/\s/.test(query);
 
   const authHeader = c.req.header("authorization");
   const bearer = authHeader?.toLowerCase().startsWith("bearer ") ? authHeader.slice(7) : undefined;
   const hfToken = resolveHfToken(bearer, c.env?.HF_TOKEN);
   const searchResults = await searchHfModels(query, hfToken, "gguf");
   const fallbackResults = searchResults.length > 0 ? [] : await searchHfModels(`${query} gguf`, hfToken);
-  const directRepoResult: HfSearchApiModel[] = query.includes("/") && !/\s/.test(query) ? [{ id: query }] : [];
+  const directRepoResult: HfSearchApiModel[] = isDirectRepoQuery ? [{ id: query }] : [];
   const seen = new Set<string>();
   const modelResults = [...directRepoResult, ...searchResults, ...fallbackResults].filter((model) => {
     const id = hfModelId(model);
@@ -115,7 +116,7 @@ app.get("/api/hf/gguf", async (c) => {
   });
 
   const details = await Promise.all(
-    modelResults.slice(0, 6).map(async (model) => {
+    modelResults.slice(0, isDirectRepoQuery ? 1 : 6).map(async (model) => {
       const id = hfModelId(model);
       if (!id) return undefined;
       const response = await fetch(hfModelApiUrl(id), hfToken ? { headers: { authorization: `Bearer ${hfToken}` } } : undefined);
@@ -125,7 +126,7 @@ app.get("/api/hf/gguf", async (c) => {
     })
   );
 
-  const models = details.flatMap((entry) => {
+  const allModels = details.flatMap((entry) => {
     if (!entry) return [];
     const repoId = hfModelId(entry.detail) ?? hfModelId(entry.fallback);
     if (!repoId) return [];
@@ -148,23 +149,26 @@ app.get("/api/hf/gguf", async (c) => {
           ? entry.fallback.pipeline_tag
           : undefined;
 
-    return (entry.detail.siblings ?? [])
-      .filter((file) => typeof file.rfilename === "string" && /\.gguf$/i.test(file.rfilename) && !/mmproj/i.test(file.rfilename))
-      .slice(0, 4)
-      .map((file) => {
-        const filename = file.rfilename as string;
-        return {
-          id: `${repoId}::${filename}`,
-          value: `${repoId}::${filename}`,
-          repoId,
-          file: filename,
-          sizeBytes: typeof file.size === "number" ? file.size : undefined,
-          downloads,
-          likes,
-          pipelineTag
-        };
-      });
-  }).slice(0, 16);
+    const ggufFiles = (entry.detail.siblings ?? []).filter(
+      (file) => typeof file.rfilename === "string" && /\.gguf$/i.test(file.rfilename) && !/mmproj/i.test(file.rfilename)
+    );
+    const visibleFiles = isDirectRepoQuery ? ggufFiles : ggufFiles.slice(0, 4);
+
+    return visibleFiles.map((file) => {
+      const filename = file.rfilename as string;
+      return {
+        id: `${repoId}::${filename}`,
+        value: `${repoId}::${filename}`,
+        repoId,
+        file: filename,
+        sizeBytes: typeof file.size === "number" ? file.size : undefined,
+        downloads,
+        likes,
+        pipelineTag
+      };
+    });
+  });
+  const models = isDirectRepoQuery ? allModels : allModels.slice(0, 16);
 
   c.header("cache-control", hfToken ? "private, no-store" : "public, max-age=60, s-maxage=300");
   return c.json({ models });
