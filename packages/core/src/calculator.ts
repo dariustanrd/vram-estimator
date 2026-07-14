@@ -11,9 +11,11 @@ export type CoreCalcInput = {
   layers?: GroundTruthValue<number> | undefined;
   /**
    * Per-token, per-layer element width used for ONE of the K or V tensors, i.e.
-   * num_key_value_heads x head_dim. This replaces the older hiddenSize x gqa approximation:
-   * that shortcut is only correct when head_dim happens to equal hiddenSize / num_attention_heads,
-   * which is false for architectures with an explicit, different head_dim (Gemma2/3, Qwen2, etc).
+   * num_key_value_heads x head_dim. Use 0 for architectures that do not allocate a
+   * persistent autoregressive KV cache in the selected runtime. This replaces the older
+   * hiddenSize x gqa approximation: that shortcut is only correct when head_dim happens
+   * to equal hiddenSize / num_attention_heads, which is false for architectures with an
+   * explicit, different head_dim (Gemma2/3, Qwen2, etc).
    */
   kvGroupWidth?: GroundTruthValue<number> | undefined;
   context?: GroundTruthValue<number> | undefined;

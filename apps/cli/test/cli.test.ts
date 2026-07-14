@@ -69,7 +69,8 @@ describe("CLI snapshots", () => {
       {
         "formula": {
           "kvCache": "kv_cache = layers x kv_group_width x context x parallel x (cache_bytes_k + cache_bytes_v) 
-      	= 1 x 2 x 8 x 1 x (2 + 2)",
+      	= 1 x 2 x 8 x 1 x (2 + 2) 
+      	= 64",
           "total": "total = (weights + kv_cache) / utilization 
       	= (64 + 64) / 1 
       	= 128",
@@ -93,6 +94,43 @@ describe("CLI snapshots", () => {
           "gqa:0.5:metadata",
         ],
         "totalBytes": 128,
+      }
+    `);
+  });
+
+  it("prints cacheless llama.cpp KV formula for BERT-style GGUFs", async () => {
+    const gguf = makeTinyBertGguf();
+    const output = await invoke(
+      ["llamacpp", "https://example.test/bert.gguf", "--cache-type-k", "not-a-cache-type"],
+      ggufFetcher(gguf)
+    );
+    const parsed = JSON.parse(output);
+
+    expect(snapshot(parsed)).toMatchInlineSnapshot(`
+      {
+        "formula": {
+          "kvCache": "kv_cache = 0
+      	bert has no persistent autoregressive KV cache in llama.cpp",
+          "total": "total = (weights + kv_cache) / utilization 
+      	= (64 + 0) / 1 
+      	= 64",
+        },
+        "missing": [],
+        "mode": "llamacpp",
+        "ok": true,
+        "resolved": [
+          "weightBytes:64:metadata",
+          "layers:6:metadata",
+          "kvGroupWidth:0:metadata",
+          "context:512:metadata",
+          "batch:1:runtime-default",
+          "kvBytes:0:metadata",
+          "utilization:1:runtime-default",
+          "hiddenSize:384:metadata",
+          "attentionHeads:12:metadata",
+          "weightDtype:Q4_0:metadata",
+        ],
+        "totalBytes": 64,
       }
     `);
   });
@@ -219,6 +257,27 @@ function makeTinyGguf(): ArrayBuffer {
   writer.kvU32("llama.context_length", 8);
   writer.kvU32("llama.attention.head_count", 2);
   writer.kvU32("llama.attention.head_count_kv", 1);
+  writer.string("token_embd.weight");
+  writer.u32(2);
+  writer.u64(4);
+  writer.u64(4);
+  writer.u32(0);
+  writer.u64(0);
+  return writer.buffer();
+}
+
+function makeTinyBertGguf(): ArrayBuffer {
+  const writer = new Writer();
+  writer.bytes([0x47, 0x47, 0x55, 0x46]);
+  writer.u32(3);
+  writer.u64(1);
+  writer.u64(6);
+  writer.kvString("general.architecture", "bert");
+  writer.kvU32("general.file_type", 2);
+  writer.kvU32("bert.block_count", 6);
+  writer.kvU32("bert.embedding_length", 384);
+  writer.kvU32("bert.context_length", 512);
+  writer.kvU32("bert.attention.head_count", 12);
   writer.string("token_embd.weight");
   writer.u32(2);
   writer.u64(4);

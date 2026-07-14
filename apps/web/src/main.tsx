@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createRoot } from "react-dom/client";
 import type { EstimateResult, GroundTruthValue, MemoryUnit } from "@vram-estimator/core";
 import { formatMemory, memory } from "@vram-estimator/core";
@@ -75,10 +75,10 @@ const VARIABLES: Record<Mode, Array<{ key: string; label: string; role: string }
   llamacpp: [
     { key: "weightBytes", label: "tensor_bytes", role: "GGUF tensor table total" },
     { key: "layers", label: "block_count", role: "Transformer blocks" },
-    { key: "kvGroupWidth", label: "kv_group_width", role: "head_count_kv x head_dim" },
+    { key: "kvGroupWidth", label: "kv_group_width", role: "K/V elements per token per layer; 0 when llama.cpp has no persistent KV cache" },
     { key: "context", label: "ctx_size", role: "--ctx-size (per slot)" },
     { key: "batch", label: "parallel", role: "--parallel (slots)" },
-    { key: "kvBytes", label: "cache_bytes", role: "Avg bytes/elem from --cache-type-k/v" },
+    { key: "kvBytes", label: "cache_bytes", role: "Avg bytes/elem from --cache-type-k/v; 0 when no persistent KV cache" },
     { key: "utilization", label: "runtime_utilization", role: "Headroom divisor" },
     { key: "hiddenSize", label: "embedding_length", role: "Reference only" },
     { key: "attentionHeads", label: "attention.head_count", role: "Query heads" },
@@ -115,12 +115,18 @@ function App() {
   const [modelSuggestionsOpen, setModelSuggestionsOpen] = useState(false);
   const [modelSuggestionsLoading, setModelSuggestionsLoading] = useState(false);
   const [activeModelSuggestion, setActiveModelSuggestion] = useState(-1);
+  const modelSuggestionRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const endpoint = mode === "vllm" ? "/api/estimate/vllm" : "/api/estimate/llamacpp";
   const placeholder =
     mode === "vllm"
       ? "Search Hugging Face, e.g. Qwen 7B Instruct"
       : "Search Hugging Face GGUFs, e.g. Qwen 7B Q4_K_M";
+
+  useEffect(() => {
+    if (!modelSuggestionsOpen || activeModelSuggestion < 0) return;
+    modelSuggestionRefs.current[activeModelSuggestion]?.scrollIntoView({ block: "nearest" });
+  }, [activeModelSuggestion, modelSuggestionsOpen, modelSuggestions.length]);
 
   useEffect(() => {
     const query = target.trim();
@@ -436,6 +442,9 @@ function App() {
                         aria-selected={index === activeModelSuggestion}
                         className={`model-suggestion${index === activeModelSuggestion ? " active" : ""}`}
                         key={suggestion.id}
+                        ref={(element) => {
+                          modelSuggestionRefs.current[index] = element;
+                        }}
                         onMouseEnter={() => setActiveModelSuggestion(index)}
                         onMouseDown={(event) => {
                           event.preventDefault();
@@ -1002,9 +1011,12 @@ function CalculationView({ result, memoryUnit, selection }: { result: EstimateRe
     overhead: memory(overheadBytes)
   };
   const batchLabel = result.mode === "vllm" ? "batch" : "parallel";
-  const kvFormula = result.mode === "vllm"
-    ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
-    : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
+  const isCachelessLlamaCpp = result.mode === "llamacpp" && kvBytes === 0 && numberValue(result.resolvedInputs.kvGroupWidth) === 0;
+  const kvFormula = isCachelessLlamaCpp
+    ? result.formula!.kvCache
+    : result.mode === "vllm"
+      ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
+      : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
   const totalFormula = `total = (weights + kv_cache) / utilization \n\t= (${weightsBytes} + ${kvBytes}) / ${util} \n\t= ${totalBytes}`;
   const overheadFormula = `overhead (modeled residual, not measured activation/workspace memory) = total - weights - kv_cache \n\t= ${totalBytes} - ${weightsBytes} - ${kvBytes} \n\t= ${overheadBytes}`;
   const selectedBatch = {

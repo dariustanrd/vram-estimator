@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateEstimate,
+  estimateLlamaCpp,
   estimateVllm,
   getVllmDefaults,
   memory,
@@ -173,6 +174,24 @@ describe("GGUF parser", () => {
     expect(parsed.metadata["general.architecture"]).toBe("llama");
     expect(parsed.tensorBytes).toBe(64);
   });
+
+  it("estimates BERT-style encoder GGUFs without requiring KV-head metadata", async () => {
+    const result = await estimateLlamaCpp(
+      { source: "https://example.test/bert.gguf" },
+      ggufFetcher(makeTinyBertGguf())
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.missing).toEqual([]);
+    expect(result.resolvedInputs.kvGroupWidth).toMatchObject({ value: 0, providedBy: "metadata" });
+    expect(result.resolvedInputs.kvBytes).toMatchObject({ value: 0, providedBy: "metadata" });
+    expect(result.memory?.kvCache.bytes).toBe(0);
+    expect(result.memory?.weights.bytes).toBe(64);
+    expect(result.formula?.kvCache).toContain("has no persistent autoregressive KV cache");
+    expect(result.notes.join("\n")).toContain("KV-cache term in this estimate is 0");
+    expect(result.notes.join("\n")).not.toContain("total persistent KV cache reserved");
+    expect(result.notes.join("\n")).not.toContain("assumed head_dim");
+  });
 });
 
 function jsonResponse(body: unknown): Response {
@@ -201,6 +220,42 @@ function makeTinyGguf(): ArrayBuffer {
   writer.u32(0);
   writer.u64(0);
   return writer.buffer();
+}
+
+function makeTinyBertGguf(): ArrayBuffer {
+  const writer = new Writer();
+  writer.bytes([0x47, 0x47, 0x55, 0x46]);
+  writer.u32(3);
+  writer.u64(1);
+  writer.u64(6);
+  writer.kvString("general.architecture", "bert");
+  writer.kvU32("general.file_type", 2);
+  writer.kvU32("bert.block_count", 6);
+  writer.kvU32("bert.embedding_length", 384);
+  writer.kvU32("bert.context_length", 512);
+  writer.kvU32("bert.attention.head_count", 12);
+  writer.string("token_embd.weight");
+  writer.u32(2);
+  writer.u64(4);
+  writer.u64(4);
+  writer.u32(0);
+  writer.u64(0);
+  return writer.buffer();
+}
+
+function ggufFetcher(buffer: ArrayBuffer): typeof fetch {
+  return (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "HEAD") {
+      return new Response(null, { status: 200, headers: { "content-length": String(buffer.byteLength) } });
+    }
+    return new Response(buffer, {
+      status: 206,
+      headers: {
+        "content-range": `bytes 0-${buffer.byteLength - 1}/${buffer.byteLength}`,
+        "content-length": String(buffer.byteLength)
+      }
+    });
+  }) as typeof fetch;
 }
 
 class Writer {

@@ -252,6 +252,7 @@ export async function estimateLlamaCpp(
   );
   const gqa = exactGqa(input.overrides?.gqa, attentionHeads, kvHeads);
   const kvHeadsResolved = kvHeads ?? deriveKvHeadsFromGqaOverride(input.overrides?.gqa, attentionHeads);
+  const kvCachelessArchitecture = isKvCachelessGgufArchitecture(arch);
 
   // llama.cpp's GGUF writer stores the true per-head K/V dimensions as attention.key_length /
   // attention.value_length for most architectures. Prefer those over the hidden_size / head_count
@@ -268,7 +269,7 @@ export async function estimateLlamaCpp(
     "override.headDim",
     `${prefix}attention.value_length`
   );
-  const fallbackHeadDim = deriveHeadDim(hiddenSize, attentionHeads);
+  const fallbackHeadDim = kvCachelessArchitecture ? undefined : deriveHeadDim(hiddenSize, attentionHeads);
   const headDimK = keyHeadDim ?? fallbackHeadDim;
   const headDimV = valueHeadDim ?? fallbackHeadDim;
   const headDimAssumed = !keyHeadDim && !valueHeadDim && Boolean(fallbackHeadDim);
@@ -286,8 +287,9 @@ export async function estimateLlamaCpp(
           headDimAssumed
         )
       : undefined;
-  const kvGroupWidth =
-    kvHeadsResolved && avgHeadDim
+  const kvGroupWidth = kvCachelessArchitecture
+    ? gt(0, `${arch} architecture has no persistent autoregressive KV cache in llama.cpp`, "metadata")
+    : kvHeadsResolved && avgHeadDim
       ? gt(
           kvHeadsResolved.value * avgHeadDim.value,
           `${kvHeadsResolved.source} x ${avgHeadDim.source}`,
@@ -327,7 +329,7 @@ export async function estimateLlamaCpp(
       reason: `GGUF tensor table contains unsupported tensor types: ${metadata.unknownTensorTypes.join(", ")}.`
     });
   }
-  if (attentionHeads && !kvHeadsResolved) {
+  if (!kvCachelessArchitecture && attentionHeads && !kvHeadsResolved) {
     missing.push({
       field: "gqa",
       reason: "GGUF attention.head_count_kv is absent; provide a kvHeads or gqa override to derive the exact GQA ratio."
@@ -337,25 +339,32 @@ export async function estimateLlamaCpp(
   const notes = [
     "llama.cpp v1 estimate assumes full GPU offload equivalent to --gpu-layers 999.",
     "This is a deterministic estimate from exact GGUF metadata and selected runtime defaults, not observed runtime allocation.",
-    "context is treated as the desired context PER PARALLEL SLOT; total KV cache reserved = context x parallel, matching how llama.cpp's --ctx-size total budget is divided across --parallel slots. If you already have a fixed total --ctx-size in mind, set parallel=1 and pass that total directly as context."
+    kvCachelessArchitecture
+      ? `${arch} does not allocate a persistent autoregressive KV cache in llama.cpp. context still limits input tokens per slot, but the KV-cache term in this estimate is 0.`
+      : "context is treated as the desired context PER PARALLEL SLOT; total persistent KV cache reserved = context x parallel, matching how llama.cpp's --ctx-size total budget is divided across --parallel slots. If you already have a fixed total --ctx-size in mind, set parallel=1 and pass that total directly as context."
   ];
   if (defaults.runtime_utilization?.value === 1) {
     notes.push(
       "The default runtime_utilization=1 assumes no extra reservation, so overhead will show as ~0. This does NOT include llama.cpp's ggml compute/graph buffer, which typically adds hundreds of MB to a few GB depending on context size, batch size, and flash-attention settings. Lower the utilization or add manual headroom for a safer real-world estimate."
     );
   }
-  if (headDimAssumed) {
+  if (!kvCachelessArchitecture && headDimAssumed) {
     notes.push(
       `${prefix}attention.key_length / ${prefix}attention.value_length are absent from this GGUF file; assumed head_dim = embedding_length / attention.head_count. This assumption is wrong for architectures with a non-standard head_dim (e.g. Gemma2/3); use the headDim override if you know the model's real value.`
     );
   }
-  if (asymmetricHeadDim) {
+  if (!kvCachelessArchitecture && asymmetricHeadDim) {
     notes.push(
       "This architecture reports different key_length and value_length (asymmetric K/V head dimensions, e.g. some latent-attention designs); the KV cache formula averages them and may be inaccurate for this model."
     );
   }
+  if (kvCachelessArchitecture) {
+    notes.push(
+      "Only persistent weights and persistent KV cache are counted here. Temporary activations, graph buffers, backend workspaces, and allocator overhead are runtime-dependent and are not included in the 0-byte KV-cache term."
+    );
+  }
   const slidingWindow = arch ? ggufNumber(metadata, `${prefix}attention.sliding_window`) : undefined;
-  if (typeof slidingWindow === "number" && context && slidingWindow < context.value) {
+  if (!kvCachelessArchitecture && typeof slidingWindow === "number" && context && slidingWindow < context.value) {
     notes.push(
       `GGUF metadata reports ${prefix}attention.sliding_window=${slidingWindow}, smaller than the ${context.value}-token context used here. Sliding-window layers only need up to ${slidingWindow} cached tokens, so real KV cache usage is likely lower than shown.`
     );
@@ -368,13 +377,15 @@ export async function estimateLlamaCpp(
     kvGroupWidth,
     context,
     batch: parallel,
-    kvBytes: gt(
-      combinedKvBytes,
-      cacheBytesK === input.overrides?.cacheBytesK || cacheBytesV === input.overrides?.cacheBytesV
-        ? "override.cacheBytesK/cacheBytesV"
-        : `cache-types.${cacheTypeK}/${cacheTypeV}`,
-      input.overrides?.cacheBytesK !== undefined || input.overrides?.cacheBytesV !== undefined ? "user" : "runtime-default"
-    ),
+    kvBytes: kvCachelessArchitecture
+      ? gt(0, `${arch} architecture has no persistent autoregressive KV cache in llama.cpp`, "metadata")
+      : gt(
+          combinedKvBytes,
+          cacheBytesK === input.overrides?.cacheBytesK || cacheBytesV === input.overrides?.cacheBytesV
+            ? "override.cacheBytesK/cacheBytesV"
+            : `cache-types.${cacheTypeK}/${cacheTypeV}`,
+          input.overrides?.cacheBytesK !== undefined || input.overrides?.cacheBytesV !== undefined ? "user" : "runtime-default"
+        ),
     utilization,
     userOverrides,
     modelSources: metadata.sources,
@@ -385,7 +396,9 @@ export async function estimateLlamaCpp(
       gpuVramGb: input.gpuVramGb,
       numGpus: input.numGpus
     },
-    kvFormulaLabel: `kv_cache = layers x kv_group_width x context x parallel x (cache_bytes_k + cache_bytes_v) \n\t= ${layers?.value ?? "?"} x ${kvGroupWidth?.value ?? "?"} x ${context?.value ?? "?"} x ${parallel?.value ?? "?"} x (${cacheBytesK ?? "?"} + ${cacheBytesV ?? "?"})`,
+    kvFormulaLabel: kvCachelessArchitecture
+      ? `kv_cache = 0\n\t${arch} has no persistent autoregressive KV cache in llama.cpp`
+      : `kv_cache = layers x kv_group_width x context x parallel x (cache_bytes_k + cache_bytes_v) \n\t= ${layers?.value ?? "?"} x ${kvGroupWidth?.value ?? "?"} x ${context?.value ?? "?"} x ${parallel?.value ?? "?"} x (${cacheBytesK ?? "?"} + ${cacheBytesV ?? "?"}) \n\t= ${llamaCppKvCacheBytes(layers, kvGroupWidth, context, parallel, cacheBytesK, cacheBytesV) ?? "?"}`,
     displayValues: {
       hiddenSize,
       attentionHeads,
@@ -439,6 +452,41 @@ function deriveKvHeadsFromGqaOverride(
 ): GroundTruthValue<number> | undefined {
   if (gqaOverride === undefined || !attentionHeads) return undefined;
   return gt(attentionHeads.value * gqaOverride, `override.gqa x ${attentionHeads.source}`, "user");
+}
+
+function llamaCppKvCacheBytes(
+  layers: GroundTruthValue<number> | undefined,
+  kvGroupWidth: GroundTruthValue<number> | undefined,
+  context: GroundTruthValue<number> | undefined,
+  parallel: GroundTruthValue<number> | undefined,
+  cacheBytesK: number | undefined,
+  cacheBytesV: number | undefined
+): number | undefined {
+  if (!layers || !kvGroupWidth || !context || !parallel || cacheBytesK === undefined || cacheBytesV === undefined) {
+    return undefined;
+  }
+  return layers.value * kvGroupWidth.value * context.value * parallel.value * (cacheBytesK + cacheBytesV);
+}
+
+const LLAMA_CPP_CACHELESS_GGUF_ARCHITECTURES = new Set([
+  "bert",
+  "dream",
+  "eurobert",
+  "gemma-embedding",
+  "jina-bert-v2",
+  "jina-bert-v3",
+  "llada",
+  "llada-moe",
+  "modern-bert",
+  "neo-bert",
+  "nomic-bert",
+  "nomic-bert-moe",
+  "rnd1",
+  "wavtokenizer-dec"
+]);
+
+function isKvCachelessGgufArchitecture(arch: string | undefined): boolean {
+  return arch !== undefined && LLAMA_CPP_CACHELESS_GGUF_ARCHITECTURES.has(arch);
 }
 
 function compact(values: Record<string, unknown>): Record<string, unknown> {
