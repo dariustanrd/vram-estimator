@@ -42,6 +42,31 @@ describe("API GGUF search", () => {
       "model-q8.gguf"
     ]);
   });
+
+  it("falls back to GGUF search when an exact repo has no GGUF files", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/models") return jsonResponse([{ id: "org/missing-gguf" }]);
+      if (url.pathname === "/api/models/org/missing") {
+        return jsonResponse({
+          id: "org/missing",
+          siblings: [{ rfilename: "README.md", size: 1 }]
+        });
+      }
+      if (url.pathname === "/api/models/org/missing-gguf") {
+        return jsonResponse({
+          id: "org/missing-gguf",
+          siblings: [{ rfilename: "model-q4.gguf", size: 4 }]
+        });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const response = await app.request("/api/hf/gguf?q=org%2Fmissing");
+    const body = (await response.json()) as { models: Array<{ repoId: string; file: string }> };
+
+    expect(body.models).toEqual([{ id: "org/missing-gguf::model-q4.gguf", value: "org/missing-gguf::model-q4.gguf", repoId: "org/missing-gguf", file: "model-q4.gguf", sizeBytes: 4 }]);
+  });
 });
 
 function jsonResponse(body: unknown): Response {

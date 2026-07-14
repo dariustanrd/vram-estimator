@@ -31,6 +31,12 @@ export type CoreCalcInput = {
   hardware?: HardwareInput | undefined;
   kvFormulaLabel?: string | undefined;
   /**
+   * Additional explanatory text appended to the numeric overhead formula when the
+   * reported overhead is only a modeled residual and known runtime overheads are
+   * outside the current calculation.
+   */
+  overheadCaveat?: string | undefined;
+  /**
    * Additional values that are useful for transparency (raw hidden_size, attention heads,
    * gqa ratio, head_dim, etc.) but are not themselves part of the calculation. Merged into
    * resolvedInputs for display purposes only; never gates the missing-value check.
@@ -114,7 +120,7 @@ export function calculateEstimate(input: CoreCalcInput): EstimateResult {
         input.kvFormulaLabel ??
           `kv_cache = 2 x layers x kv_group_width x context x batch x kv_bytes_per_element \n\t= 2 x ${input.layers!.value} x ${input.kvGroupWidth!.value} x ${input.context!.value} x ${input.batch!.value} x ${input.kvBytes!.value} \n\t= ${kvBytes}`,
         total: `total = (weights + kv_cache) / utilization \n\t= (${weightBytes} + ${kvBytes}) / ${input.utilization!.value} \n\t= ${totalBytes}`,
-      overhead: `overhead (modeled residual, not measured activation/workspace memory) = total - weights - kv_cache \n\t= ${totalBytes} - ${weightBytes} - ${kvBytes} \n\t= ${overheadBytes}`
+        overhead: `modeled_overhead = total - weights - kv_cache \n\t= ${totalBytes} - ${weightBytes} - ${kvBytes} \n\t= ${overheadBytes}${input.overheadCaveat ? `\n\n${input.overheadCaveat}` : ""}`
     },
     modelSources: input.modelSources,
     modelSourceDetails: input.modelSourceDetails,

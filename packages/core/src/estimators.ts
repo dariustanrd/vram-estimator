@@ -360,7 +360,7 @@ export async function estimateLlamaCpp(
   }
   if (kvCachelessArchitecture) {
     notes.push(
-      "Only persistent weights and persistent KV cache are counted here. Temporary activations, graph buffers, backend workspaces, and allocator overhead are runtime-dependent and are not included in the 0-byte KV-cache term."
+      "Only persistent weights and persistent KV cache are counted here. Temporary activations, graph buffers, backend workspaces, allocator padding, tokenizer/model structures, and mmap/accounting effects are runtime-dependent and are not currently modeled, so real RAM/VRAM usage should be higher than this persistent-memory total."
     );
   }
   const slidingWindow = arch ? ggufNumber(metadata, `${prefix}attention.sliding_window`) : undefined;
@@ -392,6 +392,9 @@ export async function estimateLlamaCpp(
     runtimeSources: Object.values(defaults),
     notes,
     missing,
+    overheadCaveat: kvCachelessArchitecture
+      ? "Note: this 0 is only the estimator's residual after weights + persistent KV cache. llama.cpp still needs runtime memory for temporary activations, graph buffers, backend workspaces, allocator padding, tokenizer/model structures, and possibly mmap/accounting effects; this GGUF-only calculation cannot determine that overhead."
+      : undefined,
     hardware: {
       gpuVramGb: input.gpuVramGb,
       numGpus: input.numGpus

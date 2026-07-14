@@ -111,6 +111,11 @@ describe("CLI snapshots", () => {
         "formula": {
           "kvCache": "kv_cache = 0
       	bert has no persistent autoregressive KV cache in llama.cpp",
+          "overhead": "modeled_overhead = total - weights - kv_cache 
+      	= 64 - 64 - 0 
+      	= 0
+      
+      Note: this 0 is only the estimator's residual after weights + persistent KV cache. llama.cpp still needs runtime memory for temporary activations, graph buffers, backend workspaces, allocator padding, tokenizer/model structures, and possibly mmap/accounting effects; this GGUF-only calculation cannot determine that overhead.",
           "total": "total = (weights + kv_cache) / utilization 
       	= (64 + 0) / 1 
       	= 64",
@@ -191,6 +196,9 @@ function snapshot(result: any): Record<string, unknown> {
     formula: result.formula
       ? {
           kvCache: result.formula.kvCache,
+          ...(result.formula.overhead.includes("GGUF-only calculation cannot determine")
+            ? { overhead: result.formula.overhead }
+            : {}),
           total: result.formula.total
         }
       : null,

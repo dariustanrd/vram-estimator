@@ -188,6 +188,7 @@ describe("GGUF parser", () => {
     expect(result.memory?.kvCache.bytes).toBe(0);
     expect(result.memory?.weights.bytes).toBe(64);
     expect(result.formula?.kvCache).toContain("has no persistent autoregressive KV cache");
+    expect(result.formula?.overhead).toContain("GGUF-only calculation cannot determine that overhead");
     expect(result.notes.join("\n")).toContain("KV-cache term in this estimate is 0");
     expect(result.notes.join("\n")).not.toContain("total persistent KV cache reserved");
     expect(result.notes.join("\n")).not.toContain("assumed head_dim");

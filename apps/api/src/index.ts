@@ -100,6 +100,7 @@ app.get("/api/hf/gguf", async (c) => {
   const query = c.req.query("q")?.trim();
   if (!query || query.length < 2) return c.json({ models: [] });
   const isDirectRepoQuery = query.includes("/") && !/\s/.test(query);
+  const directRepoId = isDirectRepoQuery ? query : undefined;
 
   const authHeader = c.req.header("authorization");
   const bearer = authHeader?.toLowerCase().startsWith("bearer ") ? authHeader.slice(7) : undefined;
@@ -116,7 +117,7 @@ app.get("/api/hf/gguf", async (c) => {
   });
 
   const details = await Promise.all(
-    modelResults.slice(0, isDirectRepoQuery ? 1 : 6).map(async (model) => {
+    modelResults.slice(0, isDirectRepoQuery ? 7 : 6).map(async (model) => {
       const id = hfModelId(model);
       if (!id) return undefined;
       const response = await fetch(hfModelApiUrl(id), hfToken ? { headers: { authorization: `Bearer ${hfToken}` } } : undefined);
@@ -152,7 +153,7 @@ app.get("/api/hf/gguf", async (c) => {
     const ggufFiles = (entry.detail.siblings ?? []).filter(
       (file) => typeof file.rfilename === "string" && /\.gguf$/i.test(file.rfilename) && !/mmproj/i.test(file.rfilename)
     );
-    const visibleFiles = isDirectRepoQuery ? ggufFiles : ggufFiles.slice(0, 4);
+    const visibleFiles = repoId === directRepoId ? ggufFiles : ggufFiles.slice(0, 4);
 
     return visibleFiles.map((file) => {
       const filename = file.rfilename as string;
@@ -168,7 +169,8 @@ app.get("/api/hf/gguf", async (c) => {
       };
     });
   });
-  const models = isDirectRepoQuery ? allModels : allModels.slice(0, 16);
+  const directRepoModels = directRepoId ? allModels.filter((model) => model.repoId === directRepoId) : [];
+  const models = directRepoModels.length > 0 ? directRepoModels : allModels.slice(0, 16);
 
   c.header("cache-control", hfToken ? "private, no-store" : "public, max-age=60, s-maxage=300");
   return c.json({ models });

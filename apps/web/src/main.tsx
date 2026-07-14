@@ -130,11 +130,7 @@ function App() {
 
   useEffect(() => {
     const query = target.trim();
-    const shouldSearch =
-      query.length >= 2 &&
-      !/^https?:\/\//i.test(query) &&
-      !query.includes("::") &&
-      (mode === "llamacpp" || !query.includes("/"));
+    const shouldSearch = query.length >= 2 && !/^https?:\/\//i.test(query) && !query.includes("::");
     if (!shouldSearch) {
       setModelSuggestions([]);
       setModelSuggestionsOpen(false);
@@ -1018,7 +1014,10 @@ function CalculationView({ result, memoryUnit, selection }: { result: EstimateRe
       ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
       : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
   const totalFormula = `total = (weights + kv_cache) / utilization \n\t= (${weightsBytes} + ${kvBytes}) / ${util} \n\t= ${totalBytes}`;
-  const overheadFormula = `overhead (modeled residual, not measured activation/workspace memory) = total - weights - kv_cache \n\t= ${totalBytes} - ${weightsBytes} - ${kvBytes} \n\t= ${overheadBytes}`;
+  const overheadCaveat = isCachelessLlamaCpp
+    ? "Note: this 0 is only the estimator's residual after weights + persistent KV cache. llama.cpp still needs runtime memory for temporary activations, graph buffers, backend workspaces, allocator padding, tokenizer/model structures, and possibly mmap/accounting effects; this GGUF-only calculation cannot determine that overhead."
+    : "";
+  const overheadFormula = `modeled_overhead = total - weights - kv_cache \n\t= ${totalBytes} - ${weightsBytes} - ${kvBytes} \n\t= ${overheadBytes}${overheadCaveat ? `\n\n${overheadCaveat}` : ""}`;
   const selectedBatch = {
     ...result.resolvedInputs.batch,
     value: selectedSeqs,
