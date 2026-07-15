@@ -52,6 +52,8 @@ describe("CLI snapshots", () => {
           "attentionHeads:2:metadata",
           "kvHeads:1:metadata",
           "headDim:2:metadata",
+          "headDimK:2:metadata",
+          "headDimV:2:metadata",
           "gqa:0.5:metadata",
           "weightDtype:float16:metadata",
         ],
@@ -92,6 +94,8 @@ describe("CLI snapshots", () => {
           "headDimK:2:metadata",
           "headDimV:2:metadata",
           "gqa:0.5:metadata",
+          "cacheBytesK:2:runtime-default",
+          "cacheBytesV:2:runtime-default",
         ],
         "totalBytes": 128,
       }

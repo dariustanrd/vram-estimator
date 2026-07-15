@@ -9,6 +9,7 @@ export type GgufMetadata = {
   metadata: Record<string, unknown>;
   tensorBytes?: number | undefined;
   unknownTensorTypes: number[];
+  split?: { count: number; index?: number | undefined; complete: boolean } | undefined;
   sources: string[];
 };
 
@@ -48,7 +49,11 @@ const GGML_TYPES: Record<number, TensorTypeSpec> = {
   32: { name: "Q4_0_4_8", blockSize: 32, typeSize: 18 },
   33: { name: "Q4_0_8_8", blockSize: 32, typeSize: 18 },
   34: { name: "TQ1_0", blockSize: 256, typeSize: 54 },
-  35: { name: "TQ2_0", blockSize: 256, typeSize: 66 }
+  35: { name: "TQ2_0", blockSize: 256, typeSize: 66 },
+  39: { name: "MXFP4", blockSize: 32, typeSize: 17 },
+  40: { name: "NVFP4", blockSize: 64, typeSize: 36 },
+  41: { name: "Q1_0", blockSize: 128, typeSize: 18 },
+  42: { name: "Q2_0", blockSize: 64, typeSize: 18 }
 };
 
 const GGML_TYPE_BY_NAME: Record<string, TensorTypeSpec> = Object.fromEntries(
@@ -70,6 +75,55 @@ export async function fetchGgufMetadata(
   fetcher: Fetcher = fetch
 ): Promise<GgufMetadata> {
   const url = resolveGgufUrl(source);
+  const first = await fetchSingleGgufMetadata(url, auth, fetcher);
+  const splitCount = ggufNumber(first, "split.count");
+  if (!splitCount || splitCount <= 1) return first;
+
+  const splitUrls = inferSplitUrls(url, splitCount);
+  if (!splitUrls) {
+    return {
+      ...first,
+      tensorBytes: undefined,
+      split: { count: splitCount, index: ggufNumber(first, "split.no"), complete: false }
+    };
+  }
+
+  const splits = await Promise.all(splitUrls.map((splitUrl) => fetchSingleGgufMetadata(splitUrl, auth, fetcher)));
+  const splitIntegrity = validateSplitSet(splits, splitCount);
+  const unknownTensorTypes = new Set<number>();
+  let tensorBytes = 0;
+  let canSumTensorBytes = splitIntegrity;
+  let fileSize = 0;
+  for (const split of splits) {
+    split.unknownTensorTypes.forEach((type) => unknownTensorTypes.add(type));
+    if (split.tensorBytes === undefined) {
+      canSumTensorBytes = false;
+    } else {
+      tensorBytes += split.tensorBytes;
+    }
+    if (split.fileSize === undefined) {
+      fileSize = NaN;
+    } else if (!Number.isNaN(fileSize)) {
+      fileSize += split.fileSize;
+    }
+  }
+
+  return {
+    ...first,
+    fileSize: Number.isNaN(fileSize) ? undefined : fileSize,
+    tensorCount: splits.reduce((sum, split) => sum + split.tensorCount, 0),
+    tensorBytes: canSumTensorBytes && unknownTensorTypes.size === 0 ? tensorBytes : undefined,
+    unknownTensorTypes: [...unknownTensorTypes],
+    split: { count: splitCount, index: ggufNumber(first, "split.no"), complete: splitIntegrity },
+    sources: splits.flatMap((split) => split.sources)
+  };
+}
+
+async function fetchSingleGgufMetadata(
+  url: string,
+  auth: HfAuth | undefined,
+  fetcher: Fetcher
+): Promise<GgufMetadata> {
   const fileSize = await headSize(fetcher, url, auth);
   const sizes = [4 * 1024 * 1024, 16 * 1024 * 1024, 64 * 1024 * 1024];
   let lastError: unknown;
@@ -105,6 +159,36 @@ async function rangeBytes(
     throw new Error("GGUF source must support HTTP range requests.");
   }
   return res.arrayBuffer();
+}
+
+function validateSplitSet(splits: GgufMetadata[], splitCount: number): boolean {
+  if (splits.length !== splitCount) return false;
+  const architecture = ggufString(splits[0]!, "general.architecture");
+  const seen = new Set<number>();
+  for (let i = 0; i < splits.length; i++) {
+    const split = splits[i]!;
+    if (ggufNumber(split, "split.count") !== splitCount) return false;
+    const index = ggufNumber(split, "split.no");
+    if (index !== i || seen.has(index)) return false;
+    seen.add(index);
+    const splitArchitecture = ggufString(split, "general.architecture");
+    if (architecture !== undefined && splitArchitecture !== undefined && splitArchitecture !== architecture) return false;
+  }
+  return seen.size === splitCount;
+}
+
+function inferSplitUrls(url: string, splitCount: number): string[] | undefined {
+  const match = /^(.*-)(\d+)-of-(\d+)(\.gguf)$/i.exec(url);
+  if (!match) return undefined;
+  const [, prefix, current, total, suffix] = match;
+  if (!current || !total || !suffix) return undefined;
+  const totalFromName = Number(total);
+  if (!Number.isFinite(totalFromName) || totalFromName !== splitCount) return undefined;
+  const width = current.length;
+  return Array.from({ length: splitCount }, (_, index) => {
+    const number = String(index + 1).padStart(width, "0");
+    return `${prefix}${number}-of-${total}${suffix}`;
+  });
 }
 
 class RangeTooSmallError extends Error {}
@@ -244,6 +328,7 @@ export function parseGguf(buffer: ArrayBuffer, url = "memory://gguf", fileSize?:
     metadata,
     tensorBytes: unknownTensorTypes.size === 0 ? tensorBytes : undefined,
     unknownTensorTypes: [...unknownTensorTypes],
+    split: ggufSplitInfo(metadata),
     sources: [url]
   };
 }
@@ -296,6 +381,23 @@ export function ggufString(metadata: GgufMetadata, key: string): string | undefi
   return typeof value === "string" ? value : undefined;
 }
 
+export function ggufNumberArray(metadata: GgufMetadata, key: string): number[] | undefined {
+  const value = metadata.metadata[key];
+  if (!Array.isArray(value)) return undefined;
+  return value.every((item) => typeof item === "number" && Number.isFinite(item)) ? (value as number[]) : undefined;
+}
+
+function ggufSplitInfo(metadata: Record<string, unknown>): GgufMetadata["split"] {
+  const count = metadata["split.count"];
+  if (typeof count !== "number" || !Number.isFinite(count) || count <= 1) return undefined;
+  const index = metadata["split.no"];
+  return {
+    count,
+    index: typeof index === "number" && Number.isFinite(index) ? index : undefined,
+    complete: false
+  };
+}
+
 // llama.cpp's llama_ftype enum, stored in GGUF as general.file_type. Describes the overall weight
 // quantization of the file (weights are per-tensor quantized, so this is the representative label
 // rather than a single dtype). Deprecated/removed values fall back to a generic label.
@@ -334,7 +436,11 @@ const GGUF_FILE_TYPES: Record<number, string> = {
   34: "Q4_0_4_8",
   35: "Q4_0_8_8",
   36: "TQ1_0",
-  37: "TQ2_0"
+  37: "TQ2_0",
+  38: "MXFP4 MoE",
+  39: "NVFP4",
+  40: "Q1_0",
+  41: "Q2_0"
 };
 
 export function ggufFileTypeName(metadata: GgufMetadata): string | undefined {

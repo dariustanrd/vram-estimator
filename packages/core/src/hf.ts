@@ -11,6 +11,7 @@ export type HfModelMetadata = {
   repoApiUrl?: string | undefined;
   weightBytes?: number | undefined;
   weightFiles: Array<{ path: string; size: number; source: string }>;
+  safetensorsDtype?: { value: string; source: string } | undefined;
   sourceDetails: HfModelSourceDetails;
   sources: string[];
 };
@@ -27,6 +28,7 @@ export type HfModelSourceDetails = {
   }>;
   weightBytes?: number | undefined;
   weightFiles: Array<{ path: string; size: number; source: string }>;
+  safetensorsDtype?: { value: string; source: string } | undefined;
 };
 
 type HfSibling = {
@@ -38,6 +40,10 @@ type HfApiModel = {
   id?: string | undefined;
   sha?: string | undefined;
   siblings?: HfSibling[] | undefined;
+  safetensors?: {
+    parameters?: Record<string, number> | undefined;
+    total?: number | undefined;
+  } | undefined;
 };
 
 export function authHeaders(auth?: HfAuth): HeadersInit {
@@ -121,6 +127,7 @@ async function fetchHfModelMetadataFromRepo(
     providedConfig ??
     ((await checkedJson(fetcher, configUrl, auth)) as HfConfig);
 
+  const safetensorsDtype = inferSafetensorsDtype(api);
   const siblings = api.siblings ?? [];
   const weightCandidates = siblings
     .filter((file) => /\.(safetensors|bin)$/i.test(file.rfilename))
@@ -149,6 +156,7 @@ async function fetchHfModelMetadataFromRepo(
     repoApiUrl,
     weightBytes,
     weightFiles: exactWeightFiles,
+    safetensorsDtype,
     sourceDetails: hfSourceDetails({
       modelId,
       revision: resolvedRevision,
@@ -157,7 +165,8 @@ async function fetchHfModelMetadataFromRepo(
       configUrl,
       configPath: parseHfConfigUrl(configUrl).path ?? "config.json",
       weightBytes,
-      weightFiles: exactWeightFiles
+      weightFiles: exactWeightFiles,
+      safetensorsDtype
     }),
     sources: [
       repoApiUrl,
@@ -176,6 +185,7 @@ function hfSourceDetails(input: {
   configPath: string;
   weightBytes?: number | undefined;
   weightFiles: Array<{ path: string; size: number; source: string }>;
+  safetensorsDtype?: { value: string; source: string } | undefined;
 }): HfModelSourceDetails {
   return {
     provider: "huggingface",
@@ -190,7 +200,8 @@ function hfSourceDetails(input: {
       }
     ],
     weightBytes: input.weightBytes,
-    weightFiles: input.weightFiles
+    weightFiles: input.weightFiles,
+    safetensorsDtype: input.safetensorsDtype
   };
 }
 
@@ -225,6 +236,83 @@ export function stringField(config: HfConfig, field: string): string | undefined
   return typeof value === "string" ? value : undefined;
 }
 
+export function hfWeightDtype(
+  config: HfConfig,
+  fallback?: { value: string; source: string } | undefined
+): { value: string; source: string } | undefined {
+  const quantizationConfig = objectField(config, "quantization_config");
+  if (quantizationConfig) {
+    const compressedTensorDtype = compressedTensorWeightDtype(quantizationConfig);
+    if (compressedTensorDtype) return compressedTensorDtype;
+
+    const quantMethod = stringField(quantizationConfig, "quant_method");
+    if (quantMethod) {
+      return {
+        value: normalizeQuantizationMethod(quantMethod),
+        source: "config.quantization_config.quant_method"
+      };
+    }
+  }
+
+  const torchDtype = stringField(config, "torch_dtype");
+  if (torchDtype) return { value: torchDtype, source: "config.torch_dtype" };
+  const dtype = stringField(config, "dtype");
+  if (dtype) return { value: dtype, source: "config.dtype" };
+  return fallback;
+}
+
 export function kvBytesFromDtype(dtype: string | undefined): number | undefined {
   return bytesForDtype(dtype) ?? undefined;
+}
+
+function inferSafetensorsDtype(api: HfApiModel): { value: string; source: string } | undefined {
+  const parameters = api.safetensors?.parameters;
+  if (!parameters) return undefined;
+  const entries = Object.entries(parameters).filter(([, count]) => typeof count === "number" && count > 0);
+  if (entries.length === 0) return undefined;
+
+  const floating = entries.filter(([dtype]) => FLOATING_SAFETENSORS_DTYPES[dtype.toUpperCase()]);
+  const nonFloating = entries.filter(([dtype]) => !FLOATING_SAFETENSORS_DTYPES[dtype.toUpperCase()]);
+  if (floating.length !== 1 || nonFloating.length > 0) return undefined;
+
+  return {
+    value: FLOATING_SAFETENSORS_DTYPES[floating[0]![0].toUpperCase()]!,
+    source: `hf.safetensors.parameters.${floating[0]![0]}`
+  };
+}
+
+const FLOATING_SAFETENSORS_DTYPES: Record<string, string> = {
+  BF16: "bfloat16",
+  F16: "float16",
+  FP16: "float16",
+  F32: "float32",
+  FP32: "float32"
+};
+
+function objectField(config: HfConfig, field: string): HfConfig | undefined {
+  const value = config[field];
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as HfConfig) : undefined;
+}
+
+function normalizeQuantizationMethod(value: string): string {
+  return value.toLowerCase() === "fbgemm_fp8" ? "fp8" : value;
+}
+
+function compressedTensorWeightDtype(quantizationConfig: HfConfig): { value: string; source: string } | undefined {
+  const configGroups = objectField(quantizationConfig, "config_groups");
+  if (!configGroups) return undefined;
+
+  for (const group of Object.values(configGroups)) {
+    if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+    const weights = objectField(group as HfConfig, "weights");
+    const dtype = weights ? stringField(weights, "type") : undefined;
+    if (dtype) {
+      return {
+        value: dtype,
+        source: "config.quantization_config.config_groups.*.weights.type"
+      };
+    }
+  }
+
+  return undefined;
 }

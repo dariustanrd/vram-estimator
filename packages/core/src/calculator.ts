@@ -21,6 +21,15 @@ export type CoreCalcInput = {
   context?: GroundTruthValue<number> | undefined;
   batch?: GroundTruthValue<number> | undefined;
   kvBytes?: GroundTruthValue<number> | undefined;
+  /**
+   * Exact persistent KV/cache-state bytes for the requested context x batch. Use this
+   * when the backend cache cannot be represented as the legacy uniform
+   * 2 x layers x kv_group_width x context x batch x kv_bytes formula (MLA,
+   * asymmetric K/V head dims, per-layer sliding windows, hybrid attention, etc.).
+   */
+  kvCacheBytes?: GroundTruthValue<number> | undefined;
+  /** Average persistent cache bytes per token across the requested full-context batch. */
+  kvBytesPerToken?: GroundTruthValue<number> | undefined;
   utilization?: GroundTruthValue<number> | undefined;
   userOverrides: Record<string, unknown>;
   modelSources: string[];
@@ -46,15 +55,24 @@ export type CoreCalcInput = {
 
 export function calculateEstimate(input: CoreCalcInput): EstimateResult {
   const missing = [...(input.missing ?? [])];
-  const required = {
-    weightBytes: input.weightBytes,
-    layers: input.layers,
-    kvGroupWidth: input.kvGroupWidth,
-    context: input.context,
-    batch: input.batch,
-    kvBytes: input.kvBytes,
-    utilization: input.utilization
-  };
+  const usesDirectKvCache = Boolean(input.kvCacheBytes);
+  const required = usesDirectKvCache
+    ? {
+        weightBytes: input.weightBytes,
+        context: input.context,
+        batch: input.batch,
+        kvCacheBytes: input.kvCacheBytes,
+        utilization: input.utilization
+      }
+    : {
+        weightBytes: input.weightBytes,
+        layers: input.layers,
+        kvGroupWidth: input.kvGroupWidth,
+        context: input.context,
+        batch: input.batch,
+        kvBytes: input.kvBytes,
+        utilization: input.utilization
+      };
 
   for (const [field, value] of Object.entries(required)) {
     if (!value && !missing.some((item) => item.field === field)) {
@@ -65,6 +83,9 @@ export function calculateEstimate(input: CoreCalcInput): EstimateResult {
   const resolvedInputs: Record<string, GroundTruthValue<unknown>> = {};
   for (const [field, value] of Object.entries(required)) {
     if (value) resolvedInputs[field] = value;
+  }
+  if (usesDirectKvCache && input.kvBytesPerToken) {
+    resolvedInputs.kvBytesPerToken = input.kvBytesPerToken;
   }
   for (const [field, value] of Object.entries(input.displayValues ?? {})) {
     if (value) resolvedInputs[field] = value;
@@ -88,16 +109,18 @@ export function calculateEstimate(input: CoreCalcInput): EstimateResult {
   }
 
   const weightBytes = input.weightBytes!.value;
-  const kvBytesPerToken = 2 * input.layers!.value * input.kvGroupWidth!.value * input.kvBytes!.value;
-  const kvBytesPerFullContext = kvBytesPerToken * input.context!.value;
-  const kvBytes = kvBytesPerFullContext * input.batch!.value;
+  const context = input.context!.value;
+  const batch = input.batch!.value;
+  const kvBytes = input.kvCacheBytes?.value ?? 2 * input.layers!.value * input.kvGroupWidth!.value * context * batch * input.kvBytes!.value;
+  const kvBytesPerToken =
+    input.kvBytesPerToken?.value ?? (context > 0 && batch > 0 ? kvBytes / (context * batch) : 0);
   const totalBytes = (weightBytes + kvBytes) / input.utilization!.value;
   const overheadBytes = totalBytes - weightBytes - kvBytes;
   const hardware = calculateHardwareEstimate({
     hardware: input.hardware,
     weightBytes,
     kvBytesPerToken,
-    context: input.context!.value,
+    context,
     utilization: input.utilization!.value
   });
 
@@ -118,7 +141,7 @@ export function calculateEstimate(input: CoreCalcInput): EstimateResult {
       weights: `weights = exact_weight_bytes \n\t= ${weightBytes}`,
       kvCache:
         input.kvFormulaLabel ??
-          `kv_cache = 2 x layers x kv_group_width x context x batch x kv_bytes_per_element \n\t= 2 x ${input.layers!.value} x ${input.kvGroupWidth!.value} x ${input.context!.value} x ${input.batch!.value} x ${input.kvBytes!.value} \n\t= ${kvBytes}`,
+          `kv_cache = 2 x layers x kv_group_width x context x batch x kv_bytes_per_element \n\t= 2 x ${input.layers!.value} x ${input.kvGroupWidth!.value} x ${context} x ${batch} x ${input.kvBytes!.value} \n\t= ${kvBytes}`,
         total: `total = (weights + kv_cache) / utilization \n\t= (${weightBytes} + ${kvBytes}) / ${input.utilization!.value} \n\t= ${totalBytes}`,
         overhead: `modeled_overhead = total - weights - kv_cache \n\t= ${totalBytes} - ${weightBytes} - ${kvBytes} \n\t= ${overheadBytes}${input.overheadCaveat ? `\n\n${input.overheadCaveat}` : ""}`
     },

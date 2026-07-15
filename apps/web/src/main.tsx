@@ -764,6 +764,7 @@ function SizesPanel({
   const weightsBytes = mem.weights.bytes;
   const kvPerSeqBytes = configuredSeqs > 0 ? mem.kvCache.bytes / configuredSeqs : mem.kvCache.bytes;
   const dtype = result.resolvedInputs.weightDtype?.value;
+  const modelType = describeModelType(result);
   const hardware = result.hardware;
 
   const unitWord = result.mode === "vllm" ? "sequence" : "slot";
@@ -801,6 +802,11 @@ function SizesPanel({
         <div className="metric">
           <span>Datatype</span>
           <strong>{dtype ? String(dtype) : "\u2014"}</strong>
+        </div>
+        <div className="metric model-type">
+          <span>Model type</span>
+          <strong>{modelType.label}</strong>
+          <em>{modelType.detail}</em>
         </div>
       </div>
       <div className="sizes-scenarios">
@@ -875,6 +881,73 @@ function SizesPanel({
       </div>
     </div>
   );
+}
+
+function describeModelType(result: EstimateResult): { label: string; detail: string } {
+  const ri = result.resolvedInputs;
+  const attentionHeads = numberValue(ri.attentionHeads);
+  const kvHeads = numberValue(ri.kvHeads);
+  const gqa = numberValue(ri.gqa);
+  const usesDirectKv = numberValue(ri.kvCacheBytes) !== undefined && numberValue(ri.kvBytesPerToken) !== undefined;
+  const layerContexts = parseNumberList(stringValue(ri.attentionLayerContexts));
+  const context = numberValue(ri.context);
+  const hasSpecialLayerContexts = layerContexts !== undefined && context !== undefined && layerContexts.some((value) => value !== context);
+
+  if (result.mode === "llamacpp" && numberValue(ri.kvGroupWidth) === 0 && result.memory?.kvCache.bytes === 0) {
+    return {
+      label: "Cacheless encoder",
+      detail: "No persistent autoregressive KV cache"
+    };
+  }
+
+  if (usesDirectKv) {
+    if (numberValue(ri.kvLoraRank) !== undefined) {
+      return {
+        label: "MLA latent KV",
+        detail: "Direct cache formula from kv_lora_rank + qk_rope_head_dim"
+      };
+    }
+    if (stringValue(ri.kvHeadsPerLayer)) {
+      return {
+        label: "Hybrid per-layer KV",
+        detail: "GGUF reports per-layer KV-head metadata"
+      };
+    }
+    if (hasSpecialLayerContexts) {
+      return {
+        label: "Hybrid/sliding KV",
+        detail: "Some layers use reduced or zero cache context"
+      };
+    }
+    return {
+      label: "Direct KV formula",
+      detail: "Cache cannot be represented by one uniform scalar formula"
+    };
+  }
+
+  if (attentionHeads !== undefined && kvHeads !== undefined) {
+    if (kvHeads === attentionHeads) {
+      return {
+        label: "MHA decoder",
+        detail: `${attentionHeads} query heads, ${kvHeads} KV heads`
+      };
+    }
+    if (kvHeads === 1 && attentionHeads > 1) {
+      return {
+        label: "MQA decoder",
+        detail: `${attentionHeads} query heads share 1 KV head`
+      };
+    }
+    return {
+      label: "GQA decoder",
+      detail: `${attentionHeads} query heads, ${kvHeads} KV heads${gqa !== undefined ? ` (${formatNumber(gqa)} ratio)` : ""}`
+    };
+  }
+
+  return {
+    label: result.mode === "vllm" ? "HF decoder" : "GGUF decoder",
+    detail: "Model type inferred from available metadata"
+  };
 }
 
 function CommandView({
@@ -1007,12 +1080,16 @@ function CalculationView({ result, memoryUnit, selection }: { result: EstimateRe
     overhead: memory(overheadBytes)
   };
   const batchLabel = result.mode === "vllm" ? "batch" : "parallel";
+  const directKvBytesPerToken = numberValue(result.resolvedInputs.kvBytesPerToken);
+  const usesDirectKvFormula = directKvBytesPerToken !== undefined && numberValue(result.resolvedInputs.kvCacheBytes) !== undefined;
   const isCachelessLlamaCpp = result.mode === "llamacpp" && kvBytes === 0 && numberValue(result.resolvedInputs.kvGroupWidth) === 0;
   const kvFormula = isCachelessLlamaCpp
     ? result.formula!.kvCache
-    : result.mode === "vllm"
-      ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
-      : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
+    : usesDirectKvFormula
+      ? `kv_cache = average_cache_bytes_per_token x context x ${batchLabel} \n\t= ${directKvBytesPerToken} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} \n\t= ${kvBytes}`
+      : result.mode === "vllm"
+        ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
+        : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
   const totalFormula = `total = (weights + kv_cache) / utilization \n\t= (${weightsBytes} + ${kvBytes}) / ${util} \n\t= ${totalBytes}`;
   const overheadCaveat = isCachelessLlamaCpp
     ? "Note: this 0 is only the estimator's residual after weights + persistent KV cache. llama.cpp still needs runtime memory for temporary activations, graph buffers, backend workspaces, allocator padding, tokenizer/model structures, and possibly mmap/accounting effects; this GGUF-only calculation cannot determine that overhead."
@@ -1057,9 +1134,20 @@ function HardwareCalculationView({ result, memoryUnit }: { result: EstimateResul
   const kvGroupWidth = numberValue(ri.kvGroupWidth) ?? 0;
   const kvBytes = numberValue(ri.kvBytes) ?? 0;
   const context = numberValue(ri.context) ?? 0;
+  const batch = numberValue(ri.batch) ?? 1;
+  const batchLabel = result.mode === "vllm" ? "batch" : "parallel";
+  const directKvCacheBytes = numberValue(ri.kvCacheBytes);
+  const directKvBytesPerToken = numberValue(ri.kvBytesPerToken);
+  const usesDirectKvFormula = directKvCacheBytes !== undefined && directKvBytesPerToken !== undefined;
   const perTokenPerLayerBytes = 2 * kvGroupWidth * kvBytes;
   const requestedBytes = hardware.gpuMemoryBudget.bytes;
   const nonKvBytes = weightsBytes;
+  const kvBytesPerTokenFormula = usesDirectKvFormula
+    ? `bytes_per_token_all_layers = average_cache_bytes_per_token \n\t= kv_cache_bytes / (context x ${batchLabel}) \n\t= ${directKvCacheBytes} / (${context} x ${batch}) \n\t= ${hardware.kvBytesPerToken}`
+    : `per_token_per_layer = 2 x kv_group_width x kv_bytes_per_element \n\t= 2 x ${kvGroupWidth} x ${kvBytes} \n\t= ${perTokenPerLayerBytes}\nbytes_per_token_all_layers = per_token_per_layer x layers \n\t= ${perTokenPerLayerBytes} x ${layers} \n\t= ${hardware.kvBytesPerToken}`;
+  const kvBlocksFormula = hardware.kvBlockBytes === 0
+    ? `kv_block_bytes = bytes_per_token_all_layers x block_size \n\t= ${hardware.kvBytesPerToken} x ${hardware.blockSize} \n\t= 0\ngpu_blocks = 0 because this model/runtime has no persistent KV cache blocks`
+    : `kv_block_bytes = bytes_per_token_all_layers x block_size \n\t= ${hardware.kvBytesPerToken} x ${hardware.blockSize} \n\t= ${hardware.kvBlockBytes}\ngpu_blocks = floor(available_kv_cache_memory / kv_block_bytes) \n\t= floor(${hardware.availableKvCache.bytes} / ${hardware.kvBlockBytes}) \n\t= ${hardware.gpuKvCacheBlocks}`;
 
   return (
     <div className="panel">
@@ -1081,14 +1169,21 @@ function HardwareCalculationView({ result, memoryUnit }: { result: EstimateResul
             formula={`available_kv_cache_memory = requested_memory - non_kv_cache_memory \n\t≈ ${requestedBytes} - ${nonKvBytes} \n\t= ${hardware.availableKvCache.bytes}`}
             value={formatMemory(hardware.availableKvCache, memoryUnit)}
           />
+          {usesDirectKvFormula ? (
+            <FormulaLine
+              label="Direct KV cache bytes"
+              formula={`${result.formula!.kvCache}\n\nThis is the exact cache bytes for the configured context x ${batchLabel}. The hardware capacity calculation normalizes it to bytes/token below; ${batchLabel} is not used directly when computing available GPU KV blocks.`}
+              value={formatMemory(result.memory!.kvCache, memoryUnit)}
+            />
+          ) : null}
           <FormulaLine
             label="KV bytes per token"
-            formula={`per_token_per_layer = 2 x kv_group_width x kv_bytes_per_element \n\t= 2 x ${kvGroupWidth} x ${kvBytes} \n\t= ${perTokenPerLayerBytes}\nbytes_per_token_all_layers = per_token_per_layer x layers \n\t= ${perTokenPerLayerBytes} x ${layers} \n\t= ${hardware.kvBytesPerToken}`}
+            formula={kvBytesPerTokenFormula}
             value={`${formatInteger(hardware.kvBytesPerToken)} bytes/token`}
           />
           <FormulaLine
             label="KV blocks"
-            formula={`kv_block_bytes = bytes_per_token_all_layers x block_size \n\t= ${hardware.kvBytesPerToken} x ${hardware.blockSize} \n\t= ${hardware.kvBlockBytes}\ngpu_blocks = floor(available_kv_cache_memory / kv_block_bytes) \n\t= floor(${hardware.availableKvCache.bytes} / ${hardware.kvBlockBytes}) \n\t= ${hardware.gpuKvCacheBlocks}`}
+            formula={kvBlocksFormula}
             value={`${formatInteger(hardware.gpuKvCacheBlocks)} blocks`}
           />
           <FormulaLine
@@ -1181,6 +1276,21 @@ function valueStr(value: GroundTruthValue<unknown> | undefined): string {
 
 function numberValue(value: GroundTruthValue<unknown> | undefined): number | undefined {
   return value && typeof value.value === "number" ? value.value : undefined;
+}
+
+function stringValue(value: GroundTruthValue<unknown> | undefined): string | undefined {
+  return value && typeof value.value === "string" ? value.value : undefined;
+}
+
+function parseNumberList(value: string | undefined): number[] | undefined {
+  if (!value) return undefined;
+  const numbers = value.split(",").map((part) => Number(part.trim()));
+  return numbers.every((number) => Number.isFinite(number)) ? numbers : undefined;
+}
+
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function formatConcurrency(value: number): string {
