@@ -79,6 +79,8 @@ const VARIABLES: Record<Mode, Array<{ key: string; label: string; role: string }
     { key: "context", label: "ctx_size", role: "--ctx-size (per slot)" },
     { key: "batch", label: "parallel", role: "--parallel (slots)" },
     { key: "kvBytes", label: "cache_bytes", role: "Avg bytes/elem from --cache-type-k/v; 0 when no persistent KV cache" },
+    { key: "cacheBytesK", label: "cache_bytes_k", role: "Bytes/elem from --cache-type-k" },
+    { key: "cacheBytesV", label: "cache_bytes_v", role: "Bytes/elem from --cache-type-v" },
     { key: "utilization", label: "runtime_utilization", role: "Headroom divisor" },
     { key: "hiddenSize", label: "embedding_length", role: "Reference only" },
     { key: "attentionHeads", label: "attention.head_count", role: "Query heads" },
@@ -927,10 +929,24 @@ function SizesPanel({
           <span>Datatype</span>
           <strong>{dtype ? String(dtype) : "\u2014"}</strong>
         </div>
-        <div className="metric model-type">
+        <div className="metric model-type" tabIndex={modelType.links.length > 0 ? 0 : undefined}>
           <span>Model type</span>
           <strong>{modelType.label}</strong>
           <em>{modelType.detail}</em>
+          {modelType.links.length > 0 && (
+            <div className="model-type-links" aria-label="Model type references">
+              <span>Learn more</span>
+              <ul>
+                {modelType.links.map((link) => (
+                  <li key={link.url}>
+                    <a href={link.url} target="_blank" rel="noreferrer">
+                      {link.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
       <div className="sizes-scenarios">
@@ -1007,7 +1023,29 @@ function SizesPanel({
   );
 }
 
-function describeModelType(result: EstimateResult): { label: string; detail: string } {
+type ModelTypeLink = { label: string; url: string };
+
+type ModelTypeDescription = { label: string; detail: string; links: ModelTypeLink[] };
+
+const MODEL_TYPE_LINKS = {
+  attnVariants: {label: "Attention Variants", url: "https://magazine.sebastianraschka.com/p/visual-attention-variants"},
+  transformer: { label: "Transformer", url: "https://arxiv.org/abs/1706.03762" },
+  illustratedTransformer: { label: "Illustrated Transformer", url: "https://jalammar.github.io/illustrated-transformer/" },
+  mqaPaper: { label: "MQA paper", url: "https://arxiv.org/abs/1911.02150" },
+  mqaBlog: { label: "MQA blog", url: "https://fireworks.ai/blog/multi-query-attention-is-all-you-need" },
+  gqaPaper: { label: "GQA paper", url: "https://arxiv.org/abs/2305.13245" },
+  gqaExplainer: { label: "GQA explainer", url: "https://sebastianraschka.com/llms-from-scratch/ch04/04_gqa/" },
+  mlaPaper: { label: "DeepSeek-V2 MLA", url: "https://arxiv.org/abs/2405.04434" },
+  mlaExplainer: { label: "MLA explainer", url: "https://sebastianraschka.com/llms-from-scratch/ch04/05_mla/" },
+  bertPaper: { label: "BERT encoder", url: "https://arxiv.org/abs/1810.04805" },
+  longformerPaper: { label: "Longformer", url: "https://arxiv.org/abs/2004.05150" },
+  swaExplainer: {label: "SWA explainer", url: "https://sebastianraschka.com/llm-architecture-gallery/swa/" },
+  gemmaLocalGlobal: { label: "Gemma 2", url: "https://arxiv.org/abs/2408.00118" },
+  pagedAttention: { label: "PagedAttention", url: "https://arxiv.org/abs/2309.06180" },
+  ggufSpec: { label: "GGUF metadata", url: "https://github.com/ggml-org/ggml/blob/master/docs/gguf.md" }
+} satisfies Record<string, ModelTypeLink>;
+
+function describeModelType(result: EstimateResult): ModelTypeDescription {
   const ri = result.resolvedInputs;
   const metadataModelType = stringValue(ri.modelType);
   const attentionHeads = numberValue(ri.attentionHeads);
@@ -1022,14 +1060,18 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
   if (metadataModelType) {
     return {
       label: metadataModelType,
-      detail: result.memory?.kvCache.bytes === 0 ? "No persistent autoregressive KV cache" : "From model metadata"
+      detail: result.memory?.kvCache.bytes === 0 ? "No persistent autoregressive KV cache" : "From model metadata",
+      links: result.memory?.kvCache.bytes === 0
+        ? [MODEL_TYPE_LINKS.bertPaper, MODEL_TYPE_LINKS.longformerPaper]
+        : []
     };
   }
 
   if (numberValue(ri.kvGroupWidth) === 0 && result.memory?.kvCache.bytes === 0) {
     return {
       label: "Cacheless · No KV cache",
-      detail: "No persistent autoregressive KV cache"
+      detail: "No persistent autoregressive KV cache",
+      links: [MODEL_TYPE_LINKS.bertPaper, MODEL_TYPE_LINKS.longformerPaper]
     };
   }
 
@@ -1037,42 +1079,53 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
     if (numberValue(ri.kvLoraRank) !== undefined) {
       return {
         label: "Decoder · MLA",
-        detail: "Direct cache formula from kv_lora_rank + qk_rope_head_dim"
+        detail: "Direct cache formula from kv_lora_rank + qk_rope_head_dim",
+        links: [MODEL_TYPE_LINKS.attnVariants, MODEL_TYPE_LINKS.mlaPaper, MODEL_TYPE_LINKS.mlaExplainer]
       };
     }
     if (stringValue(ri.kvHeadsPerLayer)) {
       return {
         label: "Decoder · Defined per-layer KV cache",
-        detail: "GGUF reports per-layer KV-head metadata"
+        detail: "GGUF reports per-layer KV-head metadata",
+        links: [MODEL_TYPE_LINKS.ggufSpec, MODEL_TYPE_LINKS.pagedAttention]
       };
     }
     if (hasSpecialLayerContexts) {
       return attentionLayout
         ? {
             label: `Decoder · ${attentionLayout.label} + Non-uniform KV`,
-            detail: `${attentionLayout.detail}; Per-layer KV cache size is non-uniform, e.g. from sliding-window/local attention, local/global patterns, or zero-KV layers.`
+            detail: `${attentionLayout.detail}; Per-layer KV cache size is non-uniform, e.g. from sliding-window/local attention, local/global patterns, or zero-KV layers.`,
+            links: uniqueModelTypeLinks([
+              ...attentionLayout.links,
+              MODEL_TYPE_LINKS.swaExplainer,
+              MODEL_TYPE_LINKS.gemmaLocalGlobal
+            ])
           }
         : {
             label: "Decoder · Non-uniform KV",
-            detail: "Per-layer KV cache size is non-uniform, e.g. from sliding-window/local attention, local/global patterns, or zero-KV layers."
+            detail: "Per-layer KV cache size is non-uniform, e.g. from sliding-window/local attention, local/global patterns, or zero-KV layers.",
+            links: [MODEL_TYPE_LINKS.attnVariants, MODEL_TYPE_LINKS.swaExplainer, MODEL_TYPE_LINKS.gemmaLocalGlobal]
           };
     }
     return {
       label: "Decoder · Direct KV formula",
-      detail: "Cache cannot be represented by one uniform scalar formula"
+      detail: "Cache cannot be represented by one uniform scalar formula",
+      links: [MODEL_TYPE_LINKS.pagedAttention, MODEL_TYPE_LINKS.ggufSpec]
     };
   }
 
   if (attentionLayout) {
     return {
       label: `Decoder · ${attentionLayout.label}`,
-      detail: attentionLayout.detail
+      detail: attentionLayout.detail,
+      links: attentionLayout.links
     };
   }
 
   return {
     label: result.mode === "vllm" ? "Decoder · HF" : "Decoder · GGUF",
-    detail: "Model type inferred from available metadata"
+    detail: "Model type inferred from available metadata",
+    links: result.mode === "vllm" ? [MODEL_TYPE_LINKS.pagedAttention] : [MODEL_TYPE_LINKS.ggufSpec]
   };
 }
 
@@ -1080,24 +1133,36 @@ function describeAttentionLayout(
   attentionHeads: number | undefined,
   kvHeads: number | undefined,
   gqa: number | undefined
-): { label: string; detail: string } | undefined {
+): { label: string; detail: string; links: ModelTypeLink[] } | undefined {
   if (attentionHeads === undefined || kvHeads === undefined) return undefined;
   if (kvHeads === attentionHeads) {
     return {
       label: "MHA",
-      detail: `${attentionHeads} query heads, ${kvHeads} KV heads`
+      detail: `${attentionHeads} query heads, ${kvHeads} KV heads`,
+      links: [MODEL_TYPE_LINKS.transformer, MODEL_TYPE_LINKS.illustratedTransformer]
     };
   }
   if (kvHeads === 1 && attentionHeads > 1) {
     return {
       label: "MQA",
-      detail: `${attentionHeads} query heads share 1 KV head`
+      detail: `${attentionHeads} query heads share 1 KV head`,
+      links: [MODEL_TYPE_LINKS.attnVariants, MODEL_TYPE_LINKS.mqaPaper, MODEL_TYPE_LINKS.mqaBlog]
     };
   }
   return {
     label: "GQA",
-    detail: `${attentionHeads} query heads, ${kvHeads} KV heads${gqa !== undefined ? ` (${formatNumber(gqa)} ratio)` : ""}`
+    detail: `${attentionHeads} query heads, ${kvHeads} KV heads${gqa !== undefined ? ` (${formatNumber(gqa)} ratio)` : ""}`,
+    links: [MODEL_TYPE_LINKS.attnVariants, MODEL_TYPE_LINKS.gqaPaper, MODEL_TYPE_LINKS.gqaExplainer]
   };
+}
+
+function uniqueModelTypeLinks(links: ModelTypeLink[]): ModelTypeLink[] {
+  const seen = new Set<string>();
+  return links.filter((link) => {
+    if (seen.has(link.url)) return false;
+    seen.add(link.url);
+    return true;
+  });
 }
 
 function CommandView({
@@ -1230,16 +1295,27 @@ function CalculationView({ result, memoryUnit, selection }: { result: EstimateRe
     overhead: memory(overheadBytes)
   };
   const batchLabel = result.mode === "vllm" ? "batch" : "parallel";
+  const configuredBatchLabel = `configured_${batchLabel}`;
+  const selectedBatchLabel = `selected_${batchLabel}`;
+  const contextValue = numberValue(result.resolvedInputs.context) ?? 0;
+  const directKvCacheBytes = numberValue(result.resolvedInputs.kvCacheBytes);
   const directKvBytesPerToken = numberValue(result.resolvedInputs.kvBytesPerToken);
-  const usesDirectKvFormula = directKvBytesPerToken !== undefined && numberValue(result.resolvedInputs.kvCacheBytes) !== undefined;
+  const usesDirectKvFormula = directKvBytesPerToken !== undefined && directKvCacheBytes !== undefined;
+  const averageCacheBytesPerToken = usesDirectKvFormula
+    ? directKvBytesPerToken
+    : contextValue > 0 && configuredSeqs > 0
+      ? mem.kvCache.bytes / (contextValue * configuredSeqs)
+      : 0;
+  const standardAverageFormula = result.mode === "llamacpp" && numberValue(result.resolvedInputs.cacheBytesK) !== undefined && numberValue(result.resolvedInputs.cacheBytesV) !== undefined
+    ? `average_cache_bytes_per_token = layers x kv_group_width x (cache_bytes_k + cache_bytes_v) \n\t= ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x (${valueStr(result.resolvedInputs.cacheBytesK)} + ${valueStr(result.resolvedInputs.cacheBytesV)}) \n\t= ${averageCacheBytesPerToken}`
+    : `average_cache_bytes_per_token = 2 x layers x kv_group_width x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${averageCacheBytesPerToken}`;
+  const averageCacheBytesPerTokenFormula = usesDirectKvFormula
+    ? `average_cache_bytes_per_token = direct_kv_cache_bytes / (context x ${configuredBatchLabel}) \n\t= ${directKvCacheBytes} / (${contextValue} x ${configuredSeqs}) \n\t= ${directKvBytesPerToken}`
+    : standardAverageFormula;
   const isCachelessLlamaCpp = result.mode === "llamacpp" && kvBytes === 0 && numberValue(result.resolvedInputs.kvGroupWidth) === 0;
   const kvFormula = isCachelessLlamaCpp
     ? result.formula!.kvCache
-    : usesDirectKvFormula
-      ? `kv_cache = average_cache_bytes_per_token x context x ${batchLabel} \n\t= ${directKvBytesPerToken} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} \n\t= ${kvBytes}`
-      : result.mode === "vllm"
-        ? `kv_cache = 2 x layers x kv_group_width x context x ${batchLabel} x kv_bytes_per_element \n\t= 2 x ${valueStr(result.resolvedInputs.layers)} x ${valueStr(result.resolvedInputs.kvGroupWidth)} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} x ${valueStr(result.resolvedInputs.kvBytes)} \n\t= ${kvBytes}`
-        : `kv_cache = per_slot_kv_cache x parallel \n\t= ${kvPerSeqBytes} x ${selectedSeqs} \n\t= ${kvBytes}`;
+    : `kv_cache = average_cache_bytes_per_token x context x ${selectedBatchLabel} \n\t= ${averageCacheBytesPerToken} x ${valueStr(result.resolvedInputs.context)} x ${selectedSeqs} \n\t= ${kvBytes}`;
   const totalFormula = `total = (weights + kv_cache) / utilization \n\t= (${weightsBytes} + ${kvBytes}) / ${util} \n\t= ${totalBytes}`;
   const overheadCaveat = isCachelessLlamaCpp
     ? "Note: this 0 is only the estimator's residual after weights + persistent KV cache. llama.cpp still needs runtime memory for temporary activations, graph buffers, backend workspaces, allocator padding, tokenizer/model structures, and possibly mmap/accounting effects; this GGUF-only calculation cannot determine that overhead."
@@ -1257,6 +1333,20 @@ function CalculationView({ result, memoryUnit, selection }: { result: EstimateRe
       <div className="panel-body">
         <div className="formula-list">
           <FormulaLine label="Weights" formula={result.formula!.weights} value={formatMemory(selectedMemory.weights, memoryUnit)} />
+          {usesDirectKvFormula ? (
+            <FormulaLine
+              label="Direct KV cache bytes"
+              formula={`${result.formula!.kvCache}\n\nThis is the exact cache bytes for the configured context x ${batchLabel}. The selected concurrency calculation normalizes it to average bytes/token below.`}
+              value={formatMemory(memory(directKvCacheBytes), memoryUnit)}
+            />
+          ) : null}
+          {!isCachelessLlamaCpp ? (
+            <FormulaLine
+              label="Average cache bytes/token"
+              formula={averageCacheBytesPerTokenFormula}
+              value={`${formatNumber(averageCacheBytesPerToken)} bytes/token`}
+            />
+          ) : null}
           <FormulaLine label="KV cache" formula={kvFormula} value={formatMemory(selectedMemory.kvCache, memoryUnit)} />
           <FormulaLine label="Total" formula={totalFormula} value={formatMemory(selectedMemory.total, memoryUnit)} />
           <FormulaLine label="Overhead" formula={overheadFormula} value={formatMemory(selectedMemory.overhead, memoryUnit)} />

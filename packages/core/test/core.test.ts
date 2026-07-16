@@ -275,6 +275,45 @@ describe("Hugging Face exact metadata", () => {
     expect(result.resolvedInputs.attentionLayerContexts).toMatchObject({ value: "4,4" });
   });
 
+  it("calculates HF local/global attention KV cache with different GQA", async () => {
+    const result = await estimateVllm(
+      { model: "google/gemma-4-31B-it", context: 16, batch: 1 },
+      hfModelFetcher({
+        text_config: {
+          dtype: "bfloat16",
+          num_hidden_layers: 6,
+          hidden_size: 64,
+          max_position_embeddings: 16,
+          num_attention_heads: 8,
+          num_key_value_heads: 4,
+          num_global_key_value_heads: 2,
+          head_dim: 4,
+          global_head_dim: 8,
+          sliding_window: 4,
+          layer_types: [
+            "sliding_attention",
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "sliding_attention",
+            "full_attention"
+          ]
+        }
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.memory?.kvCache.bytes).toBe(3072);
+    expect(result.resolvedInputs.kvCacheBytes).toMatchObject({
+      value: 3072,
+      source: "hf.per_layer_kv_cache_formula",
+      providedBy: "metadata"
+    });
+    expect(result.resolvedInputs.attentionLayerContexts).toMatchObject({ value: "4,4,16,4,4,16" });
+    expect(result.formula?.kvCache).toContain("sum_over_layers");
+    expect(result.notes.join("\n")).toContain("Detected separate local/global attention KV metadata");
+  });
+
   it("treats HF embedding encoder models as cacheless", async () => {
     const result = await estimateVllm(
       { model: "ibm-granite/granite-embedding-107m-multilingual", batch: 1 },
