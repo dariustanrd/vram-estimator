@@ -358,9 +358,12 @@ function App() {
   return (
     <main className="shell">
       <header className="topbar">
-        <div>
-          <h1>VRAM Estimator</h1>
-          <p>Exact metadata in, transparent inference memory math out.</p>
+        <div className="topbar-brand">
+          <img className="topbar-logo" src="/icon-192.png" alt="" aria-hidden="true" />
+          <div>
+            <h1>VRAM Estimator</h1>
+            <p>Exact metadata in, transparent inference memory math out.</p>
+          </div>
         </div>
         <div className="topbar-actions">
           <div className="segmented" role="tablist" aria-label="Estimator mode">
