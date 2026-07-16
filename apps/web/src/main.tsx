@@ -1014,6 +1014,7 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
   const kvHeads = numberValue(ri.kvHeads);
   const gqa = numberValue(ri.gqa);
   const usesDirectKv = numberValue(ri.kvCacheBytes) !== undefined && numberValue(ri.kvBytesPerToken) !== undefined;
+  const attentionLayout = describeAttentionLayout(attentionHeads, kvHeads, gqa);
   const layerContexts = parseNumberList(stringValue(ri.attentionLayerContexts));
   const context = numberValue(ri.context);
   const hasSpecialLayerContexts = layerContexts !== undefined && context !== undefined && layerContexts.some((value) => value !== context);
@@ -1027,7 +1028,7 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
 
   if (numberValue(ri.kvGroupWidth) === 0 && result.memory?.kvCache.bytes === 0) {
     return {
-      label: "Cacheless · no KV",
+      label: "Cacheless · No KV cache",
       detail: "No persistent autoregressive KV cache"
     };
   }
@@ -1041,44 +1042,61 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
     }
     if (stringValue(ri.kvHeadsPerLayer)) {
       return {
-        label: "Decoder · hybrid per-layer KV",
+        label: "Decoder · Defined per-layer KV cache",
         detail: "GGUF reports per-layer KV-head metadata"
       };
     }
     if (hasSpecialLayerContexts) {
-      return {
-        label: "Decoder · hybrid/sliding KV",
-        detail: "Some layers use reduced or zero cache context"
-      };
+      return attentionLayout
+        ? {
+            label: `Decoder · ${attentionLayout.label} + Non-uniform KV`,
+            detail: `${attentionLayout.detail}; Per-layer KV cache size is non-uniform, e.g. from sliding-window/local attention, local/global patterns, or zero-KV layers.`
+          }
+        : {
+            label: "Decoder · Non-uniform KV",
+            detail: "Per-layer KV cache size is non-uniform, e.g. from sliding-window/local attention, local/global patterns, or zero-KV layers."
+          };
     }
     return {
-      label: "Decoder · direct KV formula",
+      label: "Decoder · Direct KV formula",
       detail: "Cache cannot be represented by one uniform scalar formula"
     };
   }
 
-  if (attentionHeads !== undefined && kvHeads !== undefined) {
-    if (kvHeads === attentionHeads) {
-      return {
-        label: "Decoder · MHA",
-        detail: `${attentionHeads} query heads, ${kvHeads} KV heads`
-      };
-    }
-    if (kvHeads === 1 && attentionHeads > 1) {
-      return {
-        label: "Decoder · MQA",
-        detail: `${attentionHeads} query heads share 1 KV head`
-      };
-    }
+  if (attentionLayout) {
     return {
-      label: "Decoder · GQA",
-      detail: `${attentionHeads} query heads, ${kvHeads} KV heads${gqa !== undefined ? ` (${formatNumber(gqa)} ratio)` : ""}`
+      label: `Decoder · ${attentionLayout.label}`,
+      detail: attentionLayout.detail
     };
   }
 
   return {
     label: result.mode === "vllm" ? "Decoder · HF" : "Decoder · GGUF",
     detail: "Model type inferred from available metadata"
+  };
+}
+
+function describeAttentionLayout(
+  attentionHeads: number | undefined,
+  kvHeads: number | undefined,
+  gqa: number | undefined
+): { label: string; detail: string } | undefined {
+  if (attentionHeads === undefined || kvHeads === undefined) return undefined;
+  if (kvHeads === attentionHeads) {
+    return {
+      label: "MHA",
+      detail: `${attentionHeads} query heads, ${kvHeads} KV heads`
+    };
+  }
+  if (kvHeads === 1 && attentionHeads > 1) {
+    return {
+      label: "MQA",
+      detail: `${attentionHeads} query heads share 1 KV head`
+    };
+  }
+  return {
+    label: "GQA",
+    detail: `${attentionHeads} query heads, ${kvHeads} KV heads${gqa !== undefined ? ` (${formatNumber(gqa)} ratio)` : ""}`
   };
 }
 
