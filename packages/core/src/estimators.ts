@@ -1,5 +1,5 @@
 import { calculateEstimate, gt } from "./calculator.js";
-import { fetchGgufMetadata, ggufNumber, ggufNumberArray, ggufString, cacheTypeBytes, ggufFileTypeName } from "./gguf.js";
+import { fetchGgufMetadata, ggufNumber, ggufNumberArray, ggufString, ggufSourceDetails, cacheTypeBytes, ggufFileTypeName } from "./gguf.js";
 import type { GgufMetadata } from "./gguf.js";
 import {
   fetchHfModelMetadata,
@@ -63,14 +63,15 @@ export async function estimateVllm(
     : numberFromConfigs(configSources, ["num_key_value_heads", "num_kv_heads", "multi_query_group_num", "num_attention_groups"]);
   const gqa = exactGqa(input.overrides?.gqa, attentionHeads, kvHeads);
 
+  const kvCachelessArchitecture = hfCachelessArchitecture(configSources);
   const qkNopeHeadDim = numberFromConfigs(configSources, ["qk_nope_head_dim"]);
   const qkRopeHeadDim = numberFromConfigs(configSources, ["qk_rope_head_dim"]);
   const kvLoraRank = numberFromConfigs(configSources, ["kv_lora_rank"]);
-  const hasMlaCache = Boolean(kvLoraRank && qkRopeHeadDim);
+  const hasMlaCache = !kvCachelessArchitecture && Boolean(kvLoraRank && qkRopeHeadDim);
   const headDimExact = input.overrides?.headDim !== undefined
     ? gt(input.overrides.headDim, "override.headDim", "user")
     : numberFromConfigs(configSources, ["head_dim", "qk_head_dim"]);
-  const derivedHeadDim = deriveHeadDim(hiddenSize, attentionHeads);
+  const derivedHeadDim = kvCachelessArchitecture ? undefined : deriveHeadDim(hiddenSize, attentionHeads);
   const keyHeadDim = input.overrides?.headDim !== undefined
     ? headDimExact
     : qkNopeHeadDim && qkRopeHeadDim
@@ -86,8 +87,9 @@ export async function estimateVllm(
   const headDim = headDimExact ?? derivedHeadDim;
   const headDimAssumed = !headDimExact && Boolean(derivedHeadDim);
   const kvHeadsResolved = kvHeads ?? deriveKvHeadsFromGqaOverride(input.overrides?.gqa, attentionHeads);
-  const kvGroupWidth =
-    !hasMlaCache && kvHeadsResolved && keyHeadDim && valueHeadDim && keyHeadDim.value === valueHeadDim.value
+  const kvGroupWidth = kvCachelessArchitecture
+    ? gt(0, `${kvCachelessArchitecture.label} has no persistent autoregressive KV cache in vLLM`, "metadata")
+    : !hasMlaCache && kvHeadsResolved && keyHeadDim && valueHeadDim && keyHeadDim.value === valueHeadDim.value
       ? gt(
           kvHeadsResolved.value * keyHeadDim.value,
           `${kvHeadsResolved.source} x ${keyHeadDim.source}`,
@@ -114,11 +116,13 @@ export async function estimateVllm(
   const defaultKvDtype = defaults.kv_cache_dtype?.value as string | undefined;
   const selectedKvDtype = input.kvDtype ?? defaultKvDtype;
   const resolvedKvDtype = selectedKvDtype === "auto" ? modelDtype : selectedKvDtype;
-  const kvBytes = gt(
-    input.overrides?.kvBytes ?? kvBytesFromDtype(resolvedKvDtype),
-    input.overrides?.kvBytes !== undefined ? "override.kvBytes" : `dtype.${resolvedKvDtype}`,
-    input.overrides?.kvBytes !== undefined ? "user" : "metadata"
-  );
+  const kvBytes = kvCachelessArchitecture
+    ? gt(0, `${kvCachelessArchitecture.label} has no persistent autoregressive KV cache in vLLM`, "metadata")
+    : gt(
+        input.overrides?.kvBytes ?? kvBytesFromDtype(resolvedKvDtype),
+        input.overrides?.kvBytes !== undefined ? "override.kvBytes" : `dtype.${resolvedKvDtype}`,
+        input.overrides?.kvBytes !== undefined ? "user" : "metadata"
+      );
   const weightBytes = valueWithOverride(
     input.overrides?.weightBytes,
     metadata.weightBytes,
@@ -134,13 +138,13 @@ export async function estimateVllm(
   );
 
   const missing: MissingValue[] = [];
-  if (selectedKvDtype === "auto" && !modelDtype && input.overrides?.kvBytes === undefined) {
+  if (!kvCachelessArchitecture && selectedKvDtype === "auto" && !modelDtype && input.overrides?.kvBytes === undefined) {
     missing.push({
       field: "kvBytes",
       reason: "vLLM kv_cache_dtype=auto requires a model torch_dtype/dtype, unambiguous safetensors dtype, or user kvBytes override."
     });
   }
-  if (!hasMlaCache && attentionHeads && !kvHeadsResolved) {
+  if (!kvCachelessArchitecture && !hasMlaCache && attentionHeads && !kvHeadsResolved) {
     missing.push({
       field: "gqa",
       reason: "num_key_value_heads is absent; provide a kvHeads or gqa override to derive the exact GQA ratio."
@@ -162,7 +166,9 @@ export async function estimateVllm(
   const notes = [
     "vLLM v1 estimate is single GPU only with tensor_parallel_size=1.",
     "This is a deterministic estimate from exact metadata and selected runtime defaults, not observed runtime allocation.",
-    `KV cache assumes ${batch?.value ?? "batch"} concurrent sequences each holding the configured ${context?.value ?? "context"}-token context simultaneously unless model metadata marks some layers as sliding-window or cacheless. Override context/batch to model your expected concurrency instead of relying on these defaults.`,
+    kvCachelessArchitecture
+      ? `${kvCachelessArchitecture.label} is treated as an encoder/embedding model with no persistent autoregressive KV cache in vLLM. The KV-cache term in this estimate is 0; context still controls input sequence length, and activation/workspace memory for embedding batches is not currently modeled.`
+      : `KV cache assumes ${batch?.value ?? "batch"} concurrent sequences each holding the configured ${context?.value ?? "context"}-token context simultaneously unless model metadata marks some layers as sliding-window or cacheless. Override context/batch to model your expected concurrency instead of relying on these defaults.`,
     "The hardware capacity card uses supply-side budgeting: available_kv_cache = gpu_vram x gpu_memory_utilization - weights. vLLM's runtime profiler can reserve additional non-KV memory for CUDA graphs, activations, and non-torch allocations, so observed server logs may report a smaller KV cache than this deterministic budget unless those reserves are modeled separately.",
     "\"Overhead\" is a modeled residual computed as (weights + kv_cache) / gpu_memory_utilization - weights - kv_cache. It approximates activation memory, CUDA graphs, and allocator overhead as a fixed proportion of the utilization setting; it is not vLLM's actual memory-profiler output, which depends on max_num_batched_tokens and intermediate size."
   ];
@@ -186,7 +192,7 @@ export async function estimateVllm(
     );
   }
 
-  const kvPlan = buildHfDirectKvPlan({
+  const kvPlan = kvCachelessArchitecture ? undefined : buildHfDirectKvPlan({
     configSources,
     layers,
     context,
@@ -222,7 +228,12 @@ export async function estimateVllm(
       gpuVramGb: input.gpuVramGb,
       numGpus: input.numGpus
     },
-    kvFormulaLabel: kvPlan?.formula,
+    kvFormulaLabel: kvPlan?.formula ?? (kvCachelessArchitecture
+      ? `kv_cache = 0\n\t${kvCachelessArchitecture.label} has no persistent autoregressive KV cache in vLLM`
+      : undefined),
+    overheadCaveat: kvCachelessArchitecture
+      ? "Note: this residual does not include encoder/embedding activation memory, pooling buffers, backend workspaces, allocator padding, tokenizer/model structures, or batching effects. Real VRAM/RAM usage for embedding inference can be higher than this persistent-memory estimate."
+      : undefined,
     displayValues: {
       layers,
       hiddenSize,
@@ -237,6 +248,7 @@ export async function estimateVllm(
       gqa,
       kvBytes,
       weightDtype,
+      modelType: kvCachelessArchitecture ? gt(kvCachelessArchitecture.label, kvCachelessArchitecture.source, "metadata") : undefined,
       ...kvPlan?.displayValues
     }
   });
@@ -482,6 +494,7 @@ export async function estimateLlamaCpp(
     utilization,
     userOverrides,
     modelSources: metadata.sources,
+    modelSourceDetails: ggufSourceDetails(metadata),
     runtimeSources: Object.values(defaults),
     notes,
     missing,
@@ -506,6 +519,7 @@ export async function estimateLlamaCpp(
       cacheBytesK: kvCachelessArchitecture ? undefined : gt(cacheBytesK, input.overrides?.cacheBytesK !== undefined ? "override.cacheBytesK" : `cache-type.${cacheTypeK}`, input.overrides?.cacheBytesK !== undefined ? "user" : "runtime-default"),
       cacheBytesV: kvCachelessArchitecture ? undefined : gt(cacheBytesV, input.overrides?.cacheBytesV !== undefined ? "override.cacheBytesV" : `cache-type.${cacheTypeV}`, input.overrides?.cacheBytesV !== undefined ? "user" : "runtime-default"),
       weightDtype: gt(arch ? ggufFileTypeName(metadata) : undefined, "general.file_type", "metadata"),
+      modelType: kvCachelessArchitecture ? gt(llamaCppCachelessModelType(arch), "general.architecture", "metadata") : undefined,
       ...directKvPlan?.displayValues
     }
   });
@@ -635,6 +649,75 @@ function isDeepSeek4HfConfig(sources: HfConfigSource[]): boolean {
     }
   }
   return false;
+}
+
+function hfCachelessArchitecture(sources: HfConfigSource[]): { label: string; source: string } | undefined {
+  for (const source of sources) {
+    const modelType = stringField(source.config, "model_type");
+    if (modelType) {
+      const label = HF_CACHELESS_MODEL_TYPE_LABELS[normalizeArchitectureKey(modelType)];
+      if (label) return { label, source: `${source.prefix}.model_type` };
+    }
+
+    const architectures = source.config.architectures;
+    if (Array.isArray(architectures)) {
+      for (const architecture of architectures) {
+        if (typeof architecture !== "string") continue;
+        const label = cachelessHfArchitectureLabel(architecture);
+        if (label) return { label, source: `${source.prefix}.architectures` };
+      }
+    }
+  }
+  return undefined;
+}
+
+const HF_CACHELESS_MODEL_TYPE_LABELS: Record<string, string> = {
+  albert: "Encoder · ALBERT",
+  bert: "Encoder · BERT",
+  camembert: "Encoder · CamemBERT",
+  canine: "Encoder · CANINE",
+  deberta: "Encoder · DeBERTa",
+  "deberta-v2": "Encoder · DeBERTa",
+  distilbert: "Encoder · DistilBERT",
+  electra: "Encoder · ELECTRA",
+  ernie: "Encoder · ERNIE",
+  flaubert: "Encoder · FlauBERT",
+  "granite-embedding": "Encoder · Granite embedding",
+  "jina-bert": "Encoder · JinaBERT",
+  "jina-bert-v2": "Encoder · JinaBERT",
+  "jina-bert-v3": "Encoder · JinaBERT",
+  longformer: "Encoder · Longformer",
+  mpnet: "Encoder · MPNet",
+  modernbert: "Encoder · ModernBERT",
+  "modern-bert": "Encoder · ModernBERT",
+  "nomic-bert": "Encoder · NomicBERT",
+  roberta: "Encoder · RoBERTa",
+  "sentence-bert": "Encoder · sentence embedding",
+  xlm: "Encoder · XLM",
+  "xlm-roberta": "Encoder · XLM-RoBERTa"
+};
+
+function cachelessHfArchitectureLabel(architecture: string): string | undefined {
+  const normalized = normalizeArchitectureKey(architecture);
+  if (/granite.*embedding/.test(normalized)) return "Encoder · Granite embedding";
+  if (/xlm.*roberta/.test(normalized)) return "Encoder · XLM-RoBERTa";
+  if (/modern.*bert/.test(normalized)) return "Encoder · ModernBERT";
+  if (/jina.*bert/.test(normalized)) return "Encoder · JinaBERT";
+  if (/nomic.*bert/.test(normalized)) return "Encoder · NomicBERT";
+  if (/sentence.*bert|sentence.*transformer/.test(normalized)) return "Encoder · sentence embedding";
+  if (/deberta/.test(normalized)) return "Encoder · DeBERTa";
+  if (/distilbert/.test(normalized)) return "Encoder · DistilBERT";
+  if (/roberta/.test(normalized)) return "Encoder · RoBERTa";
+  if (/camembert/.test(normalized)) return "Encoder · CamemBERT";
+  if (/longformer/.test(normalized)) return "Encoder · Longformer";
+  if (/electra/.test(normalized)) return "Encoder · ELECTRA";
+  if (/albert/.test(normalized)) return "Encoder · ALBERT";
+  if (/^bert(model|formaskedlm|forsequenceclassification|fortokenclassification|forquestionanswering)?$/.test(normalized)) return "Encoder · BERT";
+  return undefined;
+}
+
+function normalizeArchitectureKey(value: string): string {
+  return value.toLowerCase().replace(/_/g, "-").replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function buildHfDirectKvPlan(input: {
@@ -1022,25 +1105,24 @@ function llamaCppKvCacheBytes(
   return layers.value * kvGroupWidth.value * context.value * parallel.value * (cacheBytesK + cacheBytesV);
 }
 
-const LLAMA_CPP_CACHELESS_GGUF_ARCHITECTURES = new Set([
-  "bert",
-  "dream",
-  "eurobert",
-  "gemma-embedding",
-  "jina-bert-v2",
-  "jina-bert-v3",
-  "llada",
-  "llada-moe",
-  "modern-bert",
-  "neo-bert",
-  "nomic-bert",
-  "nomic-bert-moe",
-  "rnd1",
-  "wavtokenizer-dec"
-]);
+const LLAMA_CPP_CACHELESS_GGUF_MODEL_TYPES: Record<string, string> = {
+  bert: "Encoder · BERT",
+  eurobert: "Encoder · EuroBERT",
+  "gemma-embedding": "Encoder · Gemma embedding",
+  "jina-bert-v2": "Encoder · JinaBERT",
+  "jina-bert-v3": "Encoder · JinaBERT",
+  "modern-bert": "Encoder · ModernBERT",
+  "neo-bert": "Encoder · NeoBERT",
+  "nomic-bert": "Encoder · NomicBERT",
+  "nomic-bert-moe": "Encoder · NomicBERT-MoE",
+};
 
 function isKvCachelessGgufArchitecture(arch: string | undefined): boolean {
-  return arch !== undefined && LLAMA_CPP_CACHELESS_GGUF_ARCHITECTURES.has(arch);
+  return arch !== undefined && LLAMA_CPP_CACHELESS_GGUF_MODEL_TYPES[arch] !== undefined;
+}
+
+function llamaCppCachelessModelType(arch: string | undefined): string | undefined {
+  return arch === undefined ? undefined : LLAMA_CPP_CACHELESS_GGUF_MODEL_TYPES[arch];
 }
 
 function compact(values: Record<string, unknown>): Record<string, unknown> {

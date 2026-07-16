@@ -449,6 +449,50 @@ export function ggufFileTypeName(metadata: GgufMetadata): string | undefined {
   return GGUF_FILE_TYPES[value] ?? `file_type ${value}`;
 }
 
+export type GgufModelSourceDetails = {
+  provider: "gguf";
+  modelId?: string | undefined;
+  parsedFiles: Array<{ path: string; url: string; fields: Record<string, unknown> }>;
+  weightBytes?: number | undefined;
+  weightFiles: Array<{ path: string; size: number; source: string }>;
+  weightDtype?: { value: string; source: string } | undefined;
+};
+
+function ggufFileName(url: string): string {
+  const withoutQuery = url.split(/[?#]/)[0] ?? url;
+  const name = withoutQuery.split("/").filter(Boolean).pop();
+  return name ?? url;
+}
+
+function summarizeGgufFields(metadata: Record<string, unknown>): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const key of Object.keys(metadata).sort()) {
+    const value = metadata[key];
+    // GGUF files embed the full tokenizer vocab/merge tables (often 100k+ entries). Summarize
+    // long arrays so the parsed-metadata view stays readable and the serialized payload small.
+    fields[key] = Array.isArray(value) && value.length > 16 ? `array(${value.length})` : value;
+  }
+  return fields;
+}
+
+export function ggufSourceDetails(metadata: GgufMetadata): GgufModelSourceDetails {
+  const fileType = ggufFileTypeName(metadata);
+  return {
+    provider: "gguf",
+    modelId: ggufString(metadata, "general.name"),
+    parsedFiles: [
+      {
+        path: ggufFileName(metadata.url),
+        url: metadata.url,
+        fields: summarizeGgufFields(metadata.metadata)
+      }
+    ],
+    weightBytes: metadata.tensorBytes,
+    weightFiles: [],
+    weightDtype: fileType ? { value: fileType, source: "general.file_type" } : undefined
+  };
+}
+
 export function cacheTypeBytes(cacheType: string): number | undefined {
   const normalized = cacheType.toLowerCase();
   const spec = GGML_TYPE_BY_NAME[normalized];

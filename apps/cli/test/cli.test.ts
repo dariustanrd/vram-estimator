@@ -138,6 +138,7 @@ describe("CLI snapshots", () => {
           "hiddenSize:384:metadata",
           "attentionHeads:12:metadata",
           "weightDtype:Q4_0:metadata",
+          "modelType:Encoder · BERT:metadata",
         ],
         "totalBytes": 64,
       }

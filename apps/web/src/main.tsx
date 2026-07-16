@@ -699,6 +699,7 @@ function ResultView({
   cacheTypeV: string;
 }) {
   const configuredSeqs = numberValue(result.resolvedInputs.batch) ?? 1;
+  const modelDetails = parseModelSourceDetails(result.modelSourceDetails);
   const [selection, setSelection] = useState<ResultSelection>(() => defaultSelection(result, configuredSeqs));
 
   useEffect(() => {
@@ -734,11 +735,12 @@ function ResultView({
       )}
       {result.notes.length > 0 && <AssumptionsView notes={result.notes} />}
       {result.formula && <CalculationView result={result} memoryUnit={memoryUnit} selection={selection} />}
+      {modelDetails && <ModelDetailsView details={modelDetails} memoryUnit={memoryUnit} />}
       <details className="panel">
         <summary>Raw resolved inputs &amp; sources</summary>
         <div className="panel-body">
           <pre>{JSON.stringify(result.resolvedInputs, null, 2)}</pre>
-          <pre>{JSON.stringify({ model: result.modelSources, modelDetails: result.modelSourceDetails, runtime: result.runtimeSources, hardware: result.hardware }, null, 2)}</pre>
+          <pre>{JSON.stringify({ model: result.modelSources, runtime: result.runtimeSources, hardware: result.hardware }, null, 2)}</pre>
         </div>
       </details>
     </div>
@@ -746,6 +748,127 @@ function ResultView({
 }
 
 type FlagRow = { flag: string; value: string; origin: Origin };
+
+type ParsedFile = {
+  path: string;
+  url?: string | undefined;
+  fields: Record<string, unknown>;
+};
+
+type ModelSourceDetails = {
+  provider?: string | undefined;
+  modelId?: string | undefined;
+  revision?: string | undefined;
+  repoApiUrl?: string | undefined;
+  parsedFiles?: ParsedFile[] | undefined;
+  weightBytes?: number | undefined;
+  weightFiles?: Array<{ path: string; size: number; source: string }> | undefined;
+  safetensorsDtype?: { value: string; source: string } | undefined;
+  weightDtype?: { value: string; source: string } | undefined;
+};
+
+function parseModelSourceDetails(raw: Record<string, unknown> | undefined): ModelSourceDetails | null {
+  if (!raw || typeof raw !== "object") return null;
+  const details = raw as ModelSourceDetails;
+  const hasParsedFiles = Array.isArray(details.parsedFiles) && details.parsedFiles.length > 0;
+  const hasWeightFiles = Array.isArray(details.weightFiles) && details.weightFiles.length > 0;
+  if (!hasParsedFiles && !hasWeightFiles && details.modelId === undefined) return null;
+  return details;
+}
+
+function formatFieldValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function ModelDetailsView({ details, memoryUnit }: { details: ModelSourceDetails; memoryUnit: MemoryUnit }) {
+  const parsedFiles = details.parsedFiles ?? [];
+  const weightFiles = details.weightFiles ?? [];
+  const dtype = details.safetensorsDtype ?? details.weightDtype;
+  const hfLink =
+    details.provider === "huggingface" && details.modelId
+      ? `https://huggingface.co/${details.modelId}${details.revision ? `/tree/${details.revision}` : ""}`
+      : undefined;
+
+  return (
+    <details className="panel">
+      <summary>Model metadata &amp; parsed files</summary>
+      <div className="panel-body">
+        <div className="model-detail-grid">
+          {details.modelId && (
+            <div className="model-detail">
+              <span>Model</span>
+              {hfLink ? (
+                <a href={hfLink} target="_blank" rel="noreferrer">
+                  {details.modelId}
+                </a>
+              ) : (
+                <strong>{details.modelId}</strong>
+              )}
+            </div>
+          )}
+          {details.revision && (
+            <div className="model-detail">
+              <span>Revision</span>
+              <code className="inline">{details.revision}</code>
+            </div>
+          )}
+          {dtype && (
+            <div className="model-detail">
+              <span>Datatype</span>
+              <strong>{dtype.value}</strong>
+              <em>{dtype.source}</em>
+            </div>
+          )}
+          {details.weightBytes !== undefined && (
+            <div className="model-detail">
+              <span>Weights</span>
+              <strong>{formatMemory(memory(details.weightBytes), memoryUnit)}</strong>
+            </div>
+          )}
+        </div>
+
+        {parsedFiles.map((file) => (
+          <div className="parsed-file" key={file.path}>
+            <div className="group-label parsed-file-head">
+              <span>{file.path}</span>
+              {file.url && (
+                <a href={file.url} target="_blank" rel="noreferrer">
+                  source
+                </a>
+              )}
+            </div>
+            <div className="config-table">
+              {Object.entries(file.fields).map(([key, value]) => (
+                <div className="config-row" key={key}>
+                  <code className="config-key">{key}</code>
+                  <span className="config-value">{formatFieldValue(value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {weightFiles.length > 0 && (
+          <div className="parsed-file">
+            <div className="group-label">Weight files</div>
+            <div className="config-table">
+              {weightFiles.map((file) => (
+                <div className="config-row" key={file.path}>
+                  <code className="config-key">{file.path}</code>
+                  <span className="config-value">
+                    {formatMemory(memory(file.size), memoryUnit)} · {file.source}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
 
 function SizesPanel({
   result,
@@ -766,6 +889,7 @@ function SizesPanel({
   const dtype = result.resolvedInputs.weightDtype?.value;
   const modelType = describeModelType(result);
   const hardware = result.hardware;
+  const showHardwareCapacity = Boolean(hardware && result.mode === "vllm" && hardware.kvBytesPerToken > 0);
 
   const unitWord = result.mode === "vllm" ? "sequence" : "slot";
   const batchProvidedBy = result.resolvedInputs.batch?.providedBy;
@@ -811,7 +935,7 @@ function SizesPanel({
       </div>
       <div className="sizes-scenarios">
         <span className="group-label">VRAM required per concurrency</span>
-        {hardware && result.mode === "vllm" && (
+        {showHardwareCapacity && hardware && (
           <button
             type="button"
             className={`scenario-card${selection.kind === "hardware" ? " active" : ""}${hardware.fitsFullContext ? "" : " warning"}`}
@@ -885,6 +1009,7 @@ function SizesPanel({
 
 function describeModelType(result: EstimateResult): { label: string; detail: string } {
   const ri = result.resolvedInputs;
+  const metadataModelType = stringValue(ri.modelType);
   const attentionHeads = numberValue(ri.attentionHeads);
   const kvHeads = numberValue(ri.kvHeads);
   const gqa = numberValue(ri.gqa);
@@ -893,9 +1018,16 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
   const context = numberValue(ri.context);
   const hasSpecialLayerContexts = layerContexts !== undefined && context !== undefined && layerContexts.some((value) => value !== context);
 
-  if (result.mode === "llamacpp" && numberValue(ri.kvGroupWidth) === 0 && result.memory?.kvCache.bytes === 0) {
+  if (metadataModelType) {
     return {
-      label: "Cacheless encoder",
+      label: metadataModelType,
+      detail: result.memory?.kvCache.bytes === 0 ? "No persistent autoregressive KV cache" : "From model metadata"
+    };
+  }
+
+  if (numberValue(ri.kvGroupWidth) === 0 && result.memory?.kvCache.bytes === 0) {
+    return {
+      label: "Cacheless · no KV",
       detail: "No persistent autoregressive KV cache"
     };
   }
@@ -903,24 +1035,24 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
   if (usesDirectKv) {
     if (numberValue(ri.kvLoraRank) !== undefined) {
       return {
-        label: "MLA latent KV",
+        label: "Decoder · MLA",
         detail: "Direct cache formula from kv_lora_rank + qk_rope_head_dim"
       };
     }
     if (stringValue(ri.kvHeadsPerLayer)) {
       return {
-        label: "Hybrid per-layer KV",
+        label: "Decoder · hybrid per-layer KV",
         detail: "GGUF reports per-layer KV-head metadata"
       };
     }
     if (hasSpecialLayerContexts) {
       return {
-        label: "Hybrid/sliding KV",
+        label: "Decoder · hybrid/sliding KV",
         detail: "Some layers use reduced or zero cache context"
       };
     }
     return {
-      label: "Direct KV formula",
+      label: "Decoder · direct KV formula",
       detail: "Cache cannot be represented by one uniform scalar formula"
     };
   }
@@ -928,24 +1060,24 @@ function describeModelType(result: EstimateResult): { label: string; detail: str
   if (attentionHeads !== undefined && kvHeads !== undefined) {
     if (kvHeads === attentionHeads) {
       return {
-        label: "MHA decoder",
+        label: "Decoder · MHA",
         detail: `${attentionHeads} query heads, ${kvHeads} KV heads`
       };
     }
     if (kvHeads === 1 && attentionHeads > 1) {
       return {
-        label: "MQA decoder",
+        label: "Decoder · MQA",
         detail: `${attentionHeads} query heads share 1 KV head`
       };
     }
     return {
-      label: "GQA decoder",
+      label: "Decoder · GQA",
       detail: `${attentionHeads} query heads, ${kvHeads} KV heads${gqa !== undefined ? ` (${formatNumber(gqa)} ratio)` : ""}`
     };
   }
 
   return {
-    label: result.mode === "vllm" ? "HF decoder" : "GGUF decoder",
+    label: result.mode === "vllm" ? "Decoder · HF" : "Decoder · GGUF",
     detail: "Model type inferred from available metadata"
   };
 }
@@ -1309,7 +1441,7 @@ function formatCompactNumber(value: number): string {
 }
 
 function defaultSelection(result: EstimateResult, configuredSeqs: number): ResultSelection {
-  if (result.hardware && result.mode === "vllm") return { kind: "hardware" };
+  if (result.hardware && result.mode === "vllm" && result.hardware.kvBytesPerToken > 0) return { kind: "hardware" };
   return { kind: "concurrency", seqs: configuredSeqs };
 }
 

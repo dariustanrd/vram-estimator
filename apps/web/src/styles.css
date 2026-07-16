@@ -659,6 +659,91 @@ summary {
   overflow-wrap: anywhere;
 }
 
+.model-detail-grid {
+  display: grid;
+  gap: 10px 24px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.model-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-detail > span {
+  color: #66757e;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.model-detail strong,
+.model-detail a {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.model-detail em {
+  color: #85939c;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.parsed-file {
+  display: grid;
+  gap: 8px;
+}
+
+.parsed-file-head {
+  justify-content: space-between;
+}
+
+.parsed-file-head a {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.config-table {
+  display: grid;
+  gap: 4px;
+}
+
+.config-row {
+  align-items: baseline;
+  border-top: 1px solid #eef2f4;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(180px, auto) 1fr;
+  padding-top: 4px;
+}
+
+.config-key {
+  background: none;
+  border: none;
+  color: #172026;
+  display: inline;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  padding: 0;
+}
+
+.config-value {
+  color: #33434c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+code.inline {
+  background: #f3f6f7;
+  display: inline;
+  padding: 1px 6px;
+}
+
 .badge {
   border-radius: 10px;
   font-size: 11px;
@@ -836,7 +921,8 @@ pre {
 
   .flag-row,
   .var-row,
-  .var-head {
+  .var-head,
+  .config-row {
     grid-template-columns: 1fr;
   }
 

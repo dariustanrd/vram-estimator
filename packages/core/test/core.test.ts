@@ -275,6 +275,29 @@ describe("Hugging Face exact metadata", () => {
     expect(result.resolvedInputs.attentionLayerContexts).toMatchObject({ value: "4,4" });
   });
 
+  it("treats HF embedding encoder models as cacheless", async () => {
+    const result = await estimateVllm(
+      { model: "ibm-granite/granite-embedding-107m-multilingual", batch: 1 },
+      hfModelFetcher({
+        model_type: "xlm-roberta",
+        architectures: ["XLMRobertaModel"],
+        num_hidden_layers: 12,
+        hidden_size: 384,
+        max_position_embeddings: 514,
+        num_attention_heads: 12
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.missing).toEqual([]);
+    expect(result.resolvedInputs.kvGroupWidth).toMatchObject({ value: 0, providedBy: "metadata" });
+    expect(result.resolvedInputs.kvBytes).toMatchObject({ value: 0, providedBy: "metadata" });
+    expect(result.resolvedInputs.modelType).toMatchObject({ value: "Encoder · XLM-RoBERTa" });
+    expect(result.memory?.kvCache.bytes).toBe(0);
+    expect(result.formula?.kvCache).toContain("has no persistent autoregressive KV cache in vLLM");
+    expect(result.notes.join("\n")).toContain("encoder/embedding model");
+  });
+
   it("reports unsupported DeepSeek-V4 HF cache metadata", async () => {
     const result = await estimateVllm(
       { model: "deepseek/v4", context: 8, batch: 1 },
@@ -429,6 +452,7 @@ describe("GGUF parser", () => {
     expect(result.missing).toEqual([]);
     expect(result.resolvedInputs.kvGroupWidth).toMatchObject({ value: 0, providedBy: "metadata" });
     expect(result.resolvedInputs.kvBytes).toMatchObject({ value: 0, providedBy: "metadata" });
+    expect(result.resolvedInputs.modelType).toMatchObject({ value: "Encoder · BERT", source: "general.architecture" });
     expect(result.memory?.kvCache.bytes).toBe(0);
     expect(result.memory?.weights.bytes).toBe(64);
     expect(result.formula?.kvCache).toContain("has no persistent autoregressive KV cache");
@@ -436,6 +460,48 @@ describe("GGUF parser", () => {
     expect(result.notes.join("\n")).toContain("KV-cache term in this estimate is 0");
     expect(result.notes.join("\n")).not.toContain("total persistent KV cache reserved");
     expect(result.notes.join("\n")).not.toContain("assumed head_dim");
+  });
+
+  it("exposes parsed GGUF metadata as model source details", async () => {
+    const result = await estimateLlamaCpp(
+      { source: "https://example.test/tiny.gguf" },
+      ggufFetcher(makeTinyGguf())
+    );
+
+    expect(result.ok).toBe(true);
+    const details = result.modelSourceDetails as {
+      provider: string;
+      weightBytes?: number;
+      parsedFiles: Array<{ path: string; url: string; fields: Record<string, unknown> }>;
+    };
+    expect(details.provider).toBe("gguf");
+    expect(details.weightBytes).toBe(64);
+    expect(details.parsedFiles).toHaveLength(1);
+    expect(details.parsedFiles[0]).toMatchObject({
+      path: "tiny.gguf",
+      url: "https://example.test/tiny.gguf"
+    });
+    expect(details.parsedFiles[0]!.fields["general.architecture"]).toBe("llama");
+    expect(details.parsedFiles[0]!.fields["llama.block_count"]).toBe(1);
+  });
+
+  it("summarizes long GGUF arrays instead of embedding full tokenizer tables", async () => {
+    const tokens = Array.from({ length: 128 }, (_, index) => index);
+    const buffer = makeGgufFixture(7, (writer) => {
+      writer.kvString("general.architecture", "llama");
+      writer.kvU32("llama.block_count", 1);
+      writer.kvU32("llama.embedding_length", 4);
+      writer.kvU32("llama.context_length", 8);
+      writer.kvU32("llama.attention.head_count", 2);
+      writer.kvU32("llama.attention.head_count_kv", 1);
+      writer.kvArrayU32("tokenizer.ggml.tokens", tokens);
+    });
+    const result = await estimateLlamaCpp({ source: "https://example.test/vocab.gguf" }, ggufFetcher(buffer));
+
+    const details = result.modelSourceDetails as {
+      parsedFiles: Array<{ fields: Record<string, unknown> }>;
+    };
+    expect(details.parsedFiles[0]!.fields["tokenizer.ggml.tokens"]).toBe("array(128)");
   });
 
   it("sums tensor bytes across inferable split GGUF files", async () => {
