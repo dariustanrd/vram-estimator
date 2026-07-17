@@ -1,6 +1,6 @@
 {
-  "name": "VRAM Estimator",
-  "short_name": "VRAM Estimator",
+  "name": "Model VRAM Estimator",
+  "short_name": "Model VRAM Estimator",
   "description": "Estimate inference VRAM requirements for vLLM and llama.cpp models.",
   "start_url": "/",
   "display": "standalone",
